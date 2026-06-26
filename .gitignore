@@ -1,0 +1,12 @@
+# Modelo entrenado (artefacto generado, no va al repo)
+models/*.pkl
+
+# Dataset (datos crudos, no van al repo)
+data/*.csv
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.env
+venv/
