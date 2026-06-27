@@ -1,5 +1,3 @@
-# `README.md`
-
 # Interfaz Míoeléctrica Híbrida para el Control de un Brazo Robótico (sEMG)
 
 Este proyecto implementa un sistema de control mioeléctrico distribuido en tiempo real para un brazo robótico articulado mediante señales electromiográficas de superficie (sEMG). La arquitectura del sistema optimiza el uso de hardware mediante un esquema de **procesamiento descentralizado (offload)**, delegando las tareas matemáticas de alta carga computacional y la inferencia de Machine Learning a una PC, mientras que el microcontrolador actúa estrictamente como un puente de adquisición y pasarela de control mecánico.
