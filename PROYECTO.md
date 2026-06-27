@@ -1,130 +1,161 @@
 # Proyecto EMG — Control de Servo por Señal Electromiográfica
 
-**Versión:** 3.0  
-**Última actualización:** Junio 2026  
-**Músculos:** Bíceps (A0) / Tríceps (A1)  / Antebbrazo (A2)
-**Clases:** REPOSO / FLEXIÓN / EXTENSIÓN / ROTACIÓN
+**Versión:** 3.0
+
+**Última actualización:** Junio 2026
+
+**Músculos:** Bíceps (A0) / Tríceps (A1) / Antebrazo (A2)
+
+**Clases Macro:** REPOSO / FLEXIÓN / EXTENSIÓN
 
 ---
 
 ## Arquitectura General
 
 ```
-Bíceps (A0) --──┐
-                ├─→ Arduino Uno (ADC + IIR + RMS + ZCR) ──→ PC Python (RF) ──→ Arduino (servo)
-Tríceps (A1) --─┘
-                |
-Antebrazo (A2) ─┘
+[ ETAPA 1: ADQUISICIÓN ]
+Bíceps (A0) ----┐
+Tríceps (A1) ----├─→ Arduino Uno (Puente DAQ - Muestras Crudas)
+Antebrazo (A2) --┘
+                       │
+                       ▼ [ Transmisión Serial @ 115200 baud ]
+                       │
+[ ETAPA 2: DSP Y ML DUAL (PC - Python Offload) ]
+ ┌────────────────────────────────────────────────────────┐
+ │ 1. FILTRADO DIGITAL (DSP)                              │
+ │    - Butterworth Pasabanda IIR (Orden 4) por canal     │
+ ├────────────────────────────────────────────────────────┤
+ │ 2. EXTRACCIÓN DE FEATURES (Ventana móvil 250 ms)       │
+ │    - Vectores de Características: [RMS, MAV, WL, ZC]   │
+ │    - Normalización dinámica %MVC por canal             │
+ ├────────────────────────────────────────────────────────┤
+ │ 3. PIPELINE DE INFERENCIA PIPELINE DUAL                │
+ │    - RF Classifier ──► Determina Estado Macro          │
+ │    - RF Regressor  ──► Calcula Ángulo Continuo (0-180°)│
+ └────────────────────────────────────────────────────────┘
+                       │
+                       ▼ [ Comando de Posición Angular ]
+                       │
+[ ETAPA 3: CONTROL FÍSICO ]
+ PC Python ──→ Arduino Uno (Pasarela Serial a I2C) ──→ Driver PCA9685 ──→ Servos KS-3518
+
 ```
 
-El Arduino ejecuta íntegramente el DSP (filtrado, RMS, ZCR, normalización %MVC)
-y transmite vectores de features al PC. Python clasifica y devuelve la clase predicha.
-El Arduino aplica el limitador de tasa y mueve el servo vía PCA9685.
+El Arduino ejecuta únicamente la conversión analógica-digital (ADC) de los 3 canales de forma alternada y despacha los datos crudos hacia la PC. Python centraliza el procesamiento pesado (filtrado digital, extracción de características, normalización %MVC) y ejecuta el pipeline de Machine Learning dual. Posteriormente, la PC envía las directrices de posición angular calculadas al Arduino, el cual gestiona los actuadores a través del driver PCA9685 por interfaz I2C.
 
 ---
 
 ## Hardware
 
-| Componente | Conexión |
-|---|---|
-| Módulo EMG bíceps (0–5V)    | A0 |
-| Módulo EMG tríceps (0–5V)   | A1 |
-| Módulo EMG antebrazo (0–5V) | A2 |
-| PCA9685 SDA | A4 |
-| PCA9685 SCL | A5 |
-| PCA9685 V+ | Fuente externa 5V/2A |
-| PCA9685 GND | GND compartido con Arduino |
-| Servo KS-3518 | Canal 0 del PCA9685 |
-| Oscilador PCA9685 | 25 MHz (configurado por firmware) |
+| Componente | Conexión | Descripción |
+| --- | --- | --- |
+| Módulo EMG bíceps (0–5V) | A0 | Canal analógico 0 |
+| Módulo EMG tríceps (0–5V) | A1 | Canal analógico 1 |
+| Módulo EMG antebrazo (0–5V) | A2 | Canal analógico 2 |
+| PCA9685 SDA | A4 | Línea de datos del bus I2C |
+| PCA9685 SCL | A5 | Línea de reloj del bus I2C |
+| PCA9685 V+ | Fuente externa 5V/2A | Alimentación aislada para potencia de actuadores |
+| PCA9685 GND | GND compartido con Arduino | Referencia común de señal |
+| Servomotores KS-3518 | Canales 0, 1 y 2 del PCA9685 | Actuadores de articulaciones (Rango: 0° a 180°) |
+| Oscilador PCA9685 | 25 MHz | Configurado para frecuencia base PWM de 50 Hz |
 
 ---
 
-## Pipeline DSP (embebido en Arduino)
+## Pipeline DSP (PC — Python Offload)
 
 ```
-ADC alternado A0/A1 — Timer1 a 1000 Hz total (500 Hz por canal)
+Muestras crudas recibidas por puerto serie (Fs = 1000 Hz total)
   │
-  ├─ Canal 0 (bíceps)    ─→ IIR Butterworth 20–450 Hz, orden 4, Direct Form I
-  └─ Canal 1 (tríceps)   ─→ IIR Butterworth 20–450 Hz, orden 4, Direct Form I
-  └─ Canal 2 (antebrazo) ─→ IIR Butterworth 20–450 Hz, orden 4, Direct Form I
-                                   │
-                          Buffer circular 250 ms
-                                   │
-                          Cada 20 ms (N_PASO = 10 muestras/canal):
-                            ├─ RMS por canal
-                            ├─ ZCR por canal
-                            └─ Normalización %MVC
-                                       │
-                              TX: F,<rms0>,<zcr0>,<rms1>,<zcr1>\n
+  ├─ Canal 0 (bíceps)     ─→ IIR Butterworth Pasabanda 20–200 Hz, orden 4, Direct Form I
+  ├─ Canal 1 (tríceps)    ─→ IIR Butterworth Pasabanda 20–200 Hz, orden 4, Direct Form I
+  └─ Canal 2 (antebrazo)  ─→ IIR Butterworth Pasabanda 20–200 Hz, orden 4, Direct Form I
+                                     │
+                           Buffer circular 250 ms
+                                     │
+                           Cada 20 ms (Paso de ventana):
+                             ├─ RMS (Root Mean Square) por canal
+                             ├─ MAV (Mean Absolute Value) por canal
+                             ├─ WL (Waveform Length) por canal
+                             ├─ ZCR (Zero Crossing Rate) por canal
+                             └─ Normalización %MVC dinámica por canal
+
 ```
 
-**Coeficientes IIR:**
-- B = [0.7320224766, 0, −1.4640449531, 0, 0.7320224766]
-- A = [1.0, −0.2627714585, −1.3636673385, 0.1365426158, 0.5371946248]
+> **Nota de Consistencia de Nyquist:** Para evitar fenómenos de aliasing, con una tasa de muestreo total de 1000 Hz distribuida de manera alternada entre canales, la frecuencia de corte superior del filtro Butterworth digital se ajusta a un máximo de 200 Hz para respetar el límite estricto de Nyquist por canal.
+
+**Coeficientes del Filtro Digital IIR (Filtro Pasabanda):**
+
+* **B (Numerador):** `[0.7320224766, 0.0, -1.4640449531, 0.0, 0.7320224766]`
+* **A (Denominador):** `[1.0, -0.2627714585, -1.3636673385, 0.1365426158, 0.5371946248]`
 
 ---
 
-## Pipeline ML (PC — Python)
+## Pipeline ML Dual (PC — Python)
+
+El vector de entrada consolidado integra las 4 características extraídas de todos los canales instrumentados, aplicando un escalamiento estandarizado antes de la ejecución en paralelo del ensamble:
 
 ```
-Vector F [rms0, zcr0, rms1, zcr1]
+Vector de Features X [rms, mav, wl, zcr] × canales
   │
-  └─ StandardScaler → RandomForestClassifier (200 árboles)
-          │
-          └─ Clase: 0=REPOSO / 1=FLEXION / 2=EXTENSION / 3= ROTACIÓN
-                  │
-             TX: C,<clase>\n → Arduino
+  └─► StandardScaler
+        │
+        ├──► Modelo 1: RandomForestClassifier (200 árboles)
+        │      │
+        │      └─► Predicción de Estado Macro: 0 = REPOSO / 1 = FLEXIÓN / 2 = EXTENSIÓN
+        │
+        └──► Modelo 2: RandomForestRegressor (200 árboles)
+               │
+               └─► Inferencia de Posición Dinámica: Ángulo continuo en el rango de 0° a 180°
+
 ```
 
 ---
 
-## Control de Servo
+## Control de Servo e Inferencia Cinemática
 
-| Clase | Ángulo destino |
-|---|---|
-| REPOSO | 90° |
-| FLEXIÓN | 170° |
-| EXTENSIÓN | 10° |
-| ROTACIÓN | 360° |
+La lógica de control combina el estado macro del clasificador con la interpolación fina calculada por el regresor para deparar una trayectoria continua en los servomotores:
+
+* **Filtro de Histéresis:** Se implementa una ventana de votación por mayoría que requiere de 3 ciclos de control consecutivos para confirmar un cambio en el estado macro del clasificador, previniendo oscilaciones espurias (*chattering*).
+* **Mapeo de Control Continuo:**
+* Si la predicción macro es `REPOSO`, los servos convergen a su posición neutral de seguridad ($90^\circ$).
+* Si la predicción es activa (`FLEXIÓN` o `EXTENSIÓN`), el control angular directo es gobernado en tiempo real por el ángulo continuo estimado por el regresor ($0^\circ\text{--}180^\circ$).
 
 
-
-Limitador de tasa: MAX\_CAMBIO = 4.8°/ciclo (VEL\_MAX=300°/s × DT=20ms × 0.8)  
-Histéresis de clase: confirmación en 3 ciclos consecutivos antes de cambiar estado.
+* **Limitación Cinemática:** Para garantizar suavidad y proteger los engranajes, se restringe el desplazamiento máximo por ciclo a `MAX_CAMBIO = 4.8°/ciclo` (derivado de una $\text{VEL\_MAX} = 300^\circ/\text{s}$ en un $\Delta t = 20\text{ ms}$).
 
 ---
 
 ## Protocolo Serial (115200 baud)
 
-### Arduino → PC
+### Arduino → PC (Envío continuo de telemetría analógica cruda)
+
 ```
-READY                              arranque del firmware
-F,<rms0>,<zcr0>,<rms1>,<zcr1>     vector de features normalizado (%MVC y ZCR)
-# [...]                            líneas de log/diagnóstico (ignoradas por Python)
+READY              Señal que indica el arranque exitoso del microcontrolador
+D,<A0>,<A1>,<A2>\n  Valores enteros directos del ADC (rango 0–1023) por canal muestreado
+# [...]            Líneas de depuración o comentarios (carácter inicial '#' ignorado por Python)
+
 ```
 
-### PC → Arduino
+### PC → Arduino (Envío de comandos de control mecánico y configuración)
+
 ```
-C,<0|1|2>\n    clase predicha (0=REPOSO, 1=FLEXION, 2=EXTENSION)
-A,<angulo>\n   control directo de ángulo (opcional)
-c / C          recalibrar
-m / M          alternar modo local / PC offload
+A,<ang0>,<ang1>,<ang2>\n   Comando directo de posición angular continua (0° a 180°) por articulación
+c / C                     Iniciar procedimiento de calibración de umbrales en la sesión activa
+m / M                     Conmutar entre modo de ejecución local autónomo / procesamiento remoto (offload)
+
 ```
 
 ---
 
-## Calibración (3 fases, embebida en Arduino)
+## Calibración Dinámica (Gestionada en Python)
 
-1. **Reposo (3-5s):** baseline\_rms por canal (media de ventanas RMS)
-2. **MVC bíceps (3-5s):** máximo RMS de bíceps con tríceps relajado
-3. **MVC tríceps (3-5s):** máximo RMS de tríceps con bíceps relajado
-4. **MVC antebrazo (3-5s):** máximo RMS de antebrazo con bíceps y tricep relajado
+1. **Reposo (3-5s):** Determina el nivel de ruido base (`baseline_rms`) canal por canal en un estado de completa relajación muscular.
+2. **MVC Máxima Contracción Voluntaria (3-5s por músculo):** Registra secuencialmente los picos de activación para el canal del Bíceps, Tríceps y Antebrazo de manera independiente durante esfuerzos máximos.
+
+La normalización se aplica en ventanas deslizantes en tiempo real mediante la expresión:
 
 
-Normalización %MVC en cada ciclo:
-```
-%MVC_ch = (rms_ch - baseline_ch) / (mvc_ch - baseline_ch) × 100
-```
+$$\% \text{MVC}_{\text{ch}} = \frac{\text{rms}_{\text{ch}} - \text{baseline}_{\text{ch}}}{\text{mvc}_{\text{ch}} - \text{baseline}_{\text{ch}}} \times 100$$
 
 ---
 
@@ -133,28 +164,30 @@ Normalización %MVC en cada ciclo:
 ```
 firmware/
   emg_v3/
-    emg_v3.ino          Firmware principal v3.0
+    emg_v3.ino         Firmware de adquisición y puente serie de datos crudos
 
 src/
-  config.py             Parámetros globales (fuente única de verdad)
-  main.py               Orquestador de producción (2 hilos)
+  config.py            Parámetros globales del sistema (fuente única de verdad)
+  main.py              Orquestador multihilo de producción en PC (Muestreo + Inferencia)
   core/
-    serial_bridge.py    Interfaz serial con el firmware
+    serial_bridge.py   Interfaz de comunicación bidireccional serial de alta velocidad
   models/
-    predictor.py        Clasificador RF (con fallback por umbral)
+    predictor.py       Módulo encargado del pipeline dual (Clasificador + Regresor RF)
 
 data/
-  captura.py            Captura de dataset etiquetado
-  datos_emg.csv         [generado — excluir del repositorio]
+  captura.py           Script de captura y registro indexado de datos biomédicos
+  datos_emg.csv        [generado — excluido del sistema de control de versiones]
 
 training/
-  train.py              Entrenamiento RF + evaluación + exportación
+  train.py             Script de entrenamiento dual (Evaluación cruzada K-Fold + exportación)
 
 models/
-  modelo_emg.pkl        [generado — excluir del repositorio]
-  modelo_emg_meta.json  [generado — metadatos del entrenamiento]
+  modelo_clasificador.pkl   [generado — serialización del clasificador de estados]
+  modelo_regresor.pkl       [generado — serialización del regresor continuo de ángulos]
+  meta_entrenamiento.json   [generado — almacenamiento de métricas MAE, Accuracy y R²]
 
 requirements.txt
+
 ```
 
 ---
@@ -165,42 +198,41 @@ requirements.txt
 
 ```
 Arduino IDE → firmware/emg_v3/emg_v3.ino → Upload
-Monitor serial (115200 baud): debe aparecer READY
+Verificar en el monitor serial (115200 baud) el mensaje de inicialización: READY
+
 ```
 
 ### 2. Instalar dependencias Python
 
 ```bash
 pip install -r requirements.txt
+
 ```
 
-### 3. Capturar dataset
+### 3. Capturar dataset de entrenamiento
 
 ```bash
 python data/captura.py --port COM3 --duracion 5 --rondas 5
+
 ```
 
-- 3 clases × 5 rondas × 5s × ~50 vectores/s ≈ 750 vectores por clase
-- El firmware debe estar en modo PC offload (post-calibración automática)
-- El archivo `data/datos_emg.csv` se acumula en ejecuciones sucesivas
+* Automatiza la toma sincronizada asociando características biomédicas a los ángulos fijos planteados para la calibración. El archivo `data/datos_emg.csv` añade los registros iterativamente.
 
-### 4. Entrenar modelo
+### 4. Entrenar el pipeline dual
 
 ```bash
 python training/train.py
+
 ```
 
-- Reporta accuracy, balanced accuracy, matriz de confusión e importancia de features
-- Si balanced accuracy < 0.80: capturar más datos
-- Genera `models/modelo_emg.pkl` y `models/modelo_emg_meta.json`
+* Computa el entrenamiento del clasificador (`StratifiedKFold`) y del regresor (`KFold`). Genera los reportes de exactitud, matrices de confusión correspondientes y el error absoluto medio (MAE) desglosado por rangos angulares críticos. Exporta los binarios serializados a la carpeta `models/`.
 
-### 5. Ejecutar en producción
+### 5. Ejecución en tiempo real
 
 ```bash
 python src/main.py
-```
 
-Cambiar `PORT` en `src/config.py` si el puerto es distinto a `COM3`.
+```
 
 ---
 
@@ -209,39 +241,37 @@ Cambiar `PORT` en `src/config.py` si el puerto es distinto a `COM3`.
 ### Implementado
 
 | Componente | Detalle |
-|---|---|
-| Firmware v3.0 | DAQ dual canal bíceps/tríceps, DSP embebido completo |
-| Muestreo | Timer1 alternado, 500 Hz/canal (1000 Hz total) |
-| Filtro IIR | Butterworth 20–450 Hz orden 4, Direct Form I, ambos canales |
-| Features | RMS + ZCR por canal, ventana 250 ms / paso 20 ms |
-| Normalización | %MVC con calibración de 3 fases por canal |
-| Protocolo serial | F,... (TX) / C,... (RX) / líneas # para log |
-| Histéresis de clase | 3 ciclos de confirmación |
-| Limitador de tasa | MAX_CAMBIO = 4.8°/ciclo |
-| Pipeline Python | config / serial\_bridge / predictor / main / captura / train |
-| Clasificador | RandomForest + StandardScaler, validación cruzada 5-fold |
+| --- | --- |
+| Adquisición Remota | Firmware optimizado para muestreo alternado a 1000 Hz total en los canales analógicos |
+| Arquitectura Offload | Pipeline matemático y de filtrado digital IIR Butterworth portado íntegramente a PC en Python |
+| Extracción de Features | Cálculo simultáneo en ventanas de 250 ms para métricas temporales: RMS, MAV, WL y ZCR |
+| Pipeline ML Dual | Implementación unificada de RandomForestClassifier y RandomForestRegressor operando en paralelo |
+| Robustez de Control | Mecanismos de histéresis temporal por mayoría y limitador cinemático de tasa instalados |
+| Comunicación Bidireccional | Protocolo unificado serial que opera estable a una velocidad fija de 115200 baud |
 
 ### Pendiente
 
 | Tarea | Prioridad |
-|---|---|
-| Captura de dataset con sujeto real y evaluación de balanced accuracy | Alta |
-| Pruebas de usabilidad (instrumento SUS) — Espiral 5 | Alta |
-| Métricas cuantitativas de tiempo de subida/bajada (de serial Angulo) | Media |
-| Persistencia de calibración (JSON) entre sesiones | Baja |
+| --- | --- |
+| Captura de dataset exhaustivo con sujeto real y validación de las curvas del regresor | Alta |
+| Pruebas empíricas de usabilidad del lazo de control con escala estandarizada SUS | Alta |
+| Análisis experimental cuantitativo de retardos y latencias en el canal serie | Media |
+| Persistencia estática de los parámetros de calibración (%MVC) mediante archivos estructurados JSON | Baja |
 
 ---
 
 ## Dependencias
 
 ### Arduino
+
 ```cpp
 #include <Wire.h>
 #include <Adafruit_PWMServoDriver.h>
-// Instalar: Adafruit PWM Servo Driver Library (Library Manager)
+
 ```
 
 ### Python
+
 ```
 numpy>=1.21
 scipy>=1.7
@@ -249,4 +279,5 @@ pandas>=1.3
 scikit-learn>=1.2
 joblib>=1.1
 pyserial>=3.5
+
 ```
