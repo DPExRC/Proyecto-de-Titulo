@@ -2,8 +2,8 @@
 
 **Versión:** 3.0  
 **Última actualización:** Junio 2026  
-**Músculos:** Bíceps (A0) / Tríceps (A1)  
-**Clases:** REPOSO / FLEXIÓN / EXTENSIÓN  
+**Músculos:** Bíceps (A0) / Tríceps (A1)  / Antebbrazo (A2)
+**Clases:** REPOSO / FLEXIÓN / EXTENSIÓN / ROTACIÓN
 
 ---
 
@@ -27,8 +27,9 @@ El Arduino aplica el limitador de tasa y mueve el servo vía PCA9685.
 
 | Componente | Conexión |
 |---|---|
-| Módulo EMG bíceps (0–5V) | A0 |
-| Módulo EMG tríceps (0–5V) | A1 |
+| Módulo EMG bíceps (0–5V)    | A0 |
+| Módulo EMG tríceps (0–5V)   | A1 |
+| Módulo EMG antebrazo (0–5V) | A2 |
 | PCA9685 SDA | A4 |
 | PCA9685 SCL | A5 |
 | PCA9685 V+ | Fuente externa 5V/2A |
@@ -43,8 +44,9 @@ El Arduino aplica el limitador de tasa y mueve el servo vía PCA9685.
 ```
 ADC alternado A0/A1 — Timer1 a 1000 Hz total (500 Hz por canal)
   │
-  ├─ Canal 0 (bíceps)  ─→ IIR Butterworth 20–450 Hz, orden 4, Direct Form I
-  └─ Canal 1 (tríceps) ─→ IIR Butterworth 20–450 Hz, orden 4, Direct Form I
+  ├─ Canal 0 (bíceps)    ─→ IIR Butterworth 20–450 Hz, orden 4, Direct Form I
+  └─ Canal 1 (tríceps)   ─→ IIR Butterworth 20–450 Hz, orden 4, Direct Form I
+  └─ Canal 2 (antebrazo) ─→ IIR Butterworth 20–450 Hz, orden 4, Direct Form I
                                    │
                           Buffer circular 250 ms
                                    │
@@ -69,7 +71,7 @@ Vector F [rms0, zcr0, rms1, zcr1]
   │
   └─ StandardScaler → RandomForestClassifier (200 árboles)
           │
-          └─ Clase: 0=REPOSO / 1=FLEXION / 2=EXTENSION
+          └─ Clase: 0=REPOSO / 1=FLEXION / 2=EXTENSION / 3= ROTACIÓN
                   │
              TX: C,<clase>\n → Arduino
 ```
@@ -83,6 +85,9 @@ Vector F [rms0, zcr0, rms1, zcr1]
 | REPOSO | 90° |
 | FLEXIÓN | 170° |
 | EXTENSIÓN | 10° |
+| ROTACIÓN | 360° |
+
+
 
 Limitador de tasa: MAX\_CAMBIO = 4.8°/ciclo (VEL\_MAX=300°/s × DT=20ms × 0.8)  
 Histéresis de clase: confirmación en 3 ciclos consecutivos antes de cambiar estado.
@@ -110,9 +115,11 @@ m / M          alternar modo local / PC offload
 
 ## Calibración (3 fases, embebida en Arduino)
 
-1. **Reposo (3s):** baseline\_rms por canal (media de ventanas RMS)
-2. **MVC bíceps (3s):** máximo RMS de bíceps con tríceps relajado
-3. **MVC tríceps (3s):** máximo RMS de tríceps con bíceps relajado
+1. **Reposo (3-5s):** baseline\_rms por canal (media de ventanas RMS)
+2. **MVC bíceps (3-5s):** máximo RMS de bíceps con tríceps relajado
+3. **MVC tríceps (3-5s):** máximo RMS de tríceps con bíceps relajado
+4. **MVC antebrazo (3-5s):** máximo RMS de antebrazo con bíceps y tricep relajado
+
 
 Normalización %MVC en cada ciclo:
 ```
