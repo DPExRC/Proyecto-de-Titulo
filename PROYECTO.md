@@ -13,6 +13,8 @@
 Bíceps (A0) ──┐
               ├─→ Arduino Uno (ADC + IIR + RMS + ZCR) ──→ PC Python (RF) ──→ Arduino (servo)
 Tríceps (A1) ─┘
+              |
+Antebrazo (A2) ─┘
 ```
 
 El Arduino ejecuta íntegramente el DSP (filtrado, RMS, ZCR, normalización %MVC)
