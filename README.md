@@ -174,10 +174,3 @@ python src/main.py
 * **Filtro de Histéresis Temporal:** Las decisiones del clasificador pasan por un algoritmo de votación por mayoría de 3 ciclos consecutivos, eliminando activaciones falsas o ruidos espurios transitorios (*chattering*).
 * **Limitador de Tasa Cinemática:** El ángulo continuo arrojado por el regresor está acotado por software a un incremento máximo de `4.8° por ciclo` (basado en una velocidad angular real de los servos de $300^\circ/\text{s}$ en deltas de tiempo de $20\text{ ms}$), garantizando transiciones mecánicas fluidas y previniendo el desgaste de engranajes.
 
----
-
-## 📝 Licencia y Créditos
-
-Desarrollado como proyecto de ingeniería de sistemas de adquisición biomédica y control distribuido en software libre.
-
-* **Última Actualización:** Junio 2026.
