@@ -1,5 +1,30 @@
 # =============================================================================
-# config.py — Parámetros globales del sistema EMG
+# config.py — Parámetros globales del sistema EMG (v3.0)
+# =============================================================================
+# Arquitectura confirmada:
+#   - 3 canales sEMG: bíceps braquial, tríceps braquial, deltoides anterior
+#   - 2 DOF controlados por EMG:
+#       DOF 1 — Codo: bidireccional, par antagonista biceps/triceps.
+#               Reposo = 0°. Activación de bíceps incrementa el ángulo
+#               (flexión). Activación de tríceps acelera el retorno hacia 0°
+#               (no produce ángulos negativos; el piso del rango es 0°).
+#       DOF 2 — Hombro: unidireccional, canal único deltoides anterior.
+#               Reposo = 0°. Activación incrementa el ángulo hacia 180°.
+#   - Vector de características: RMS, MAV, WL, ZC por canal (4 x 3 = 12).
+#   - Modelo: un único RandomForestRegressor multi-salida
+#     (angulo_codo, angulo_hombro). Sin etapa de clasificación — el
+#     gating de reposo/ruido se resuelve mediante UMBRAL_BAJO/UMBRAL_ALTO
+#     (%MVC), el filtro exponencial asimétrico y el limitador de
+#     slew-rate, igual que en el firmware Arduino.
+#
+# ── PENDIENTE DE CONFIRMACIÓN ────────────────────────────────────────────
+#   UMBRAL_BAJO/UMBRAL_ALTO se fijaron en 12.0/90.0 para que coincidan con
+#   el firmware Arduino (emg_v3.ino), que es el único componente del
+#   proyecto con evidencia de validación sobre hardware real. La versión
+#   anterior de este archivo usaba 20.0/80.0 (UMBRAL_REPOSO_PCT /
+#   UMBRAL_ACTIVO_PCT) — verificar cuál par fue efectivamente validado
+#   experimentalmente antes de la entrega final, y unificar en ambos
+#   lugares (firmware y Python) si se confirma un valor distinto.
 # =============================================================================
 
 import os
@@ -14,48 +39,67 @@ BAUDRATE = 115200
 # ---------------------------------------------------------------------------
 # Señal EMG
 # ---------------------------------------------------------------------------
-N_CANALES       = 2
-FS              = 500.0    # Hz por canal (muestreo alternado, 1000 Hz total)
-VENTANA_MS      = 250      # ms
-PASO_MS         = 20       # ms
-N_VENTANA       = int(FS * VENTANA_MS / 1000)  # 125 muestras por canal
-N_PASO          = int(FS * PASO_MS    / 1000)  #   10 muestras por canal
+N_CANALES   = 3                              # biceps, triceps, deltoides
+FS_TOTAL    = 1000.0                         # Hz, tasa total del ADC (Arduino)
+FS          = FS_TOTAL / N_CANALES           # Hz efectivos por canal ≈ 333.33
+VENTANA_MS  = 250                            # ms
+PASO_MS     = 20                             # ms
+N_VENTANA   = round(FS * VENTANA_MS / 1000)  # ≈ 83 muestras por canal
+N_PASO      = round(FS * PASO_MS / 1000)     # ≈ 7 muestras por canal
+
+# Nyquist efectivo por canal, derivado de FS (ver Capítulo 1, sección 1.4.1)
+NYQUIST_EFECTIVO_HZ = FS / 2.0               # ≈ 166.7 Hz
+FILTRO_CORTE_HZ     = 150.0                  # margen de seguridad bajo Nyquist
+
+# ---------------------------------------------------------------------------
+# Canales — nombres explícitos por índice, evita errores de orden
+# ---------------------------------------------------------------------------
+NOMBRES_CANALES = ["biceps", "triceps", "deltoides"]
 
 # ---------------------------------------------------------------------------
 # Features
 # ---------------------------------------------------------------------------
-# Vector: [rms_ch0(%MVC), zcr_ch0, rms_ch1(%MVC), zcr_ch1]
-N_FEATURES = 4
-NOMBRES_FEATURES = ["rms_biceps", "zcr_biceps", "rms_triceps", "zcr_triceps"]
+# Vector: 4 características temporales (RMS, MAV, WL, ZC) por cada uno de
+# los 3 canales = 12 columnas. Orden fijo, usado tanto en captura como en
+# entrenamiento e inferencia — no reordenar sin actualizar los tres scripts.
+NOMBRES_FEATURES_POR_CANAL = ["rms", "mav", "wl", "zc"]
+N_FEATURES_POR_CANAL = len(NOMBRES_FEATURES_POR_CANAL)
+N_FEATURES = N_FEATURES_POR_CANAL * N_CANALES  # 12
 
-# ---------------------------------------------------------------------------
-# Clases
-# ---------------------------------------------------------------------------
-CLASES       = {0: "REPOSO", 1: "FLEXION", 2: "EXTENSION"}
-N_CLASES     = 3
+NOMBRES_FEATURES = [
+    f"{feat}_{canal}"
+    for canal in NOMBRES_CANALES
+    for feat in NOMBRES_FEATURES_POR_CANAL
+]
+# Resultado: ['rms_biceps', 'mav_biceps', 'wl_biceps', 'zc_biceps',
+#             'rms_triceps', 'mav_triceps', 'wl_triceps', 'zc_triceps',
+#             'rms_deltoides', 'mav_deltoides', 'wl_deltoides', 'zc_deltoides']
 
 # ---------------------------------------------------------------------------
 # Modelo
 # ---------------------------------------------------------------------------
-MODEL_PATH = os.path.join(os.path.dirname(__file__), "..", "models", "modelo_emg.pkl")
+MODEL_PATH = os.path.join(os.path.dirname(__file__), "..", "models", "modelo_regresor.pkl")
 DATA_PATH  = os.path.join(os.path.dirname(__file__), "..", "data",   "datos_emg.csv")
 
 # ---------------------------------------------------------------------------
-# Control servo
+# Control servo — 2 DOF, reposo = 0° en ambos (ver nota de cabecera)
 # ---------------------------------------------------------------------------
 ANGULO_MIN = 0.0
 ANGULO_MAX = 180.0
-ANGULO_REPOSO    = 90.0
-ANGULO_FLEXION   = 170.0
-ANGULO_EXTENSION = 10.0
 
-UMBRAL_REPOSO_PCT = 20.0
-UMBRAL_ACTIVO_PCT = 80.0
+COL_ANGULO_CODO   = "angulo_codo"
+COL_ANGULO_HOMBRO = "angulo_hombro"
+COLS_TARGET       = [COL_ANGULO_CODO, COL_ANGULO_HOMBRO]
+
+# Umbrales de gating en %MVC — alineados con el firmware Arduino (ver nota
+# de cabecera sobre el valor pendiente de confirmar).
+UMBRAL_BAJO  = 12.0   # %MVC bajo el cual se considera reposo (ángulo → 0°)
+UMBRAL_ALTO  = 90.0   # %MVC sobre el cual se satura el ángulo (→ 180°)
 
 INTERVALO_CONTROL = PASO_MS / 1000.0   # s — misma cadencia que el firmware
 
 # ---------------------------------------------------------------------------
 # Captura de dataset
 # ---------------------------------------------------------------------------
-DURACION_CAPTURA_S = 5      # segundos de captura por etiqueta
-MIN_REGISTROS_CLASE = 30    # mínimo recomendado por clase para entrenamiento
+DURACION_CAPTURA_S  = 5      # segundos de captura por etiqueta/ángulo objetivo
+MIN_REGISTROS_CLASE = 30     # mínimo recomendado por combinación de ángulos
