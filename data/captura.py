@@ -50,15 +50,13 @@ import csv
 import os
 import argparse
 import sys
-from collections import deque
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from src.config import (BAUDRATE, DATA_PATH, DURACION_CAPTURA_S,
                          NOMBRES_FEATURES, NOMBRES_CANALES,
                          COLS_TARGET, COL_ANGULO_CODO, COL_ANGULO_HOMBRO,
                          N_VENTANA, N_PASO, ANGULO_MIN, ANGULO_MAX)
-from processing.filtro import crear_filtros_por_canal
-from processing.features import extraer_vector_features
+from src.processing.dsp import CapturadorVentanas
 
 PROTOCOLO_PREFIJO = "S,"   # trama cruda: "S,<v_biceps>,<v_triceps>,<v_deltoides>"
 COLUMNAS_CSV = NOMBRES_FEATURES + COLS_TARGET
@@ -106,41 +104,6 @@ def _parsear_trama(linea: str):
     except ValueError:
         return None
 
-
-class CapturadorVentanas:
-    """Mantiene el estado de filtrado y ventaneo por canal, y emite un
-    vector de 12 features cada vez que se acumulan N_PASO muestras
-    nuevas sobre una ventana llena de N_VENTANA muestras filtradas."""
-
-    def __init__(self):
-        self.filtros = crear_filtros_por_canal()  # {nombre: FiltroCanal}
-        self.buffers = {n: deque(maxlen=N_VENTANA) for n in NOMBRES_CANALES}
-        self.contador_pasos = 0
-
-    def reset(self):
-        for f in self.filtros.values():
-            f.reset()
-        for b in self.buffers.values():
-            b.clear()
-        self.contador_pasos = 0
-
-    def procesar_trama(self, valores_crudos: list):
-        """Procesa una trama de 3 muestras crudas (una por canal).
-        Retorna el vector de 12 features si se completó un paso de
-        ventaneo, o None si aún no hay suficientes muestras."""
-        for nombre, crudo in zip(NOMBRES_CANALES, valores_crudos):
-            filtrada = self.filtros[nombre].procesar(crudo)
-            self.buffers[nombre].append(filtrada)
-
-        self.contador_pasos += 1
-        ventana_llena = all(len(self.buffers[n]) == N_VENTANA for n in NOMBRES_CANALES)
-
-        if ventana_llena and self.contador_pasos >= N_PASO:
-            self.contador_pasos = 0
-            ventanas = [list(self.buffers[n]) for n in NOMBRES_CANALES]
-            return extraer_vector_features(ventanas)
-
-        return None
 
 
 def capturar_angulos(ser: serial.Serial, angulo_codo: float, angulo_hombro: float,

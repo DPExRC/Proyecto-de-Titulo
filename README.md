@@ -1,3 +1,4 @@
+<!-- markdownlint-disable-file MD046 -->
 # Interfaz Míoeléctrica Híbrida para el Control de un Brazo Robótico (sEMG)
 
 Este proyecto implementa un sistema de control mioeléctrico distribuido en tiempo real para un brazo robótico articulado mediante señales electromiográficas de superficie (sEMG). La arquitectura del sistema optimiza el uso de hardware mediante un esquema de **procesamiento descentralizado (offload)**, delegando las tareas matemáticas de alta carga computacional y la inferencia de Machine Learning a una PC, mientras que el microcontrolador actúa estrictamente como un puente de adquisición y pasarela de control mecánico.
@@ -8,7 +9,6 @@ Este proyecto implementa un sistema de control mioeléctrico distribuido en tiem
 
 El flujo de información y procesamiento se divide en tres etapas claramente definidas:
 
-```
 [ ETAPA 1: ADQUISICIÓN (Hardware Embebido) ]
  Bíceps (A0) ------┐
  Tríceps (A1) ------├─→ Arduino Uno ──[ Transmisión Serial de Muestras Crudas ]
@@ -39,8 +39,6 @@ El flujo de información y procesamiento se divide en tres etapas claramente def
 
 [ ETAPA 3: CONTROL CINEMÁTICO ]
  PC Python ───→ Arduino Uno (Pasarela Serial-I2C) ───→ Driver PCA9685 ───→ Servos KS-3518
-
-```
 
 1. **Adquisición (Arduino Uno):** Configurado mediante interrupciones de hardware para muestrear de forma alternada 3 canales analógicos a una tasa consolidada de 1000 Hz. Envía las lecturas crudas del ADC sin procesar para evitar cuellos de botella por restricciones de SRAM.
 2. **Procesamiento y Predicción (PC):** Módulo en Python que realiza el filtrado digital IIR, extrae características en ventanas móviles de 250 ms, normaliza los datos respecto a la Máxima Contracción Voluntaria (%MVC) y ejecuta un pipeline predictivo dual (Clasificación para estados macro + Regresión para interpolación angular continua).
@@ -80,35 +78,6 @@ Sobre ventanas dinámicas de 250 ms deslizantes cada 20 ms, se calculan de maner
 
 * **RandomForestClassifier (200 árboles):** Determina el estado macro intencional del usuario en tres clases discretas: `REPOSO` (Clase 0), `FLEXIÓN` (Clase 1) o `EXTENSIÓN` (Clase 2).
 * **RandomForestRegressor (200 árboles):** Si el clasificador detecta un estado activo (1 o 2), el regresor asume el control del lazo cinemático para interpolar de forma no lineal y fluida la trayectoria exacta del brazo en un rango continuo de `0° a 180°`.
-
----
-
-## 📂 Estructura del Repositorio
-
-```
-├── firmware/
-│   └── emg_v3/
-│       └── emg_v3.ino         # Firmware de adquisición serie y pasarela I2C
-├── src/
-│   ├── config.py              # Parámetros globales y constantes (Fuente única de verdad)
-│   ├── main.py                # Orquestador multihilo de producción en tiempo real
-│   └── core/
-│       └── serial_bridge.py   # Gestión del protocolo serial bidireccional
-│   └── models/
-│       └── predictor.py       # Interfaz de inferencia del pipeline unificado (RF)
-├── data/
-│   ├── captura.py             # Script automatizado de captura de señales etiquetadas
-│   └── datos_emg.csv          # Dataset acumulado (Excluido del control de versiones)
-├── training/
-│   └── train.py               # Script de entrenamiento, validación cruzada y exportación
-├── models/
-│   ├── modelo_clasificador.pkl # Binario serializado del clasificador de estados macro
-│   ├── modelo_regresor.pkl     # Binario serializado del regresor angular continuo
-│   └── meta_entrenamiento.json # Reporte de métricas logradas (Accuracy, MAE, R²)
-├── requirements.txt           # Dependencias de entorno del ecosistema Python
-└── README.md                  # Documentación principal del sistema
-
-```
 
 ---
 
@@ -174,3 +143,29 @@ python src/main.py
 * **Filtro de Histéresis Temporal:** Las decisiones del clasificador pasan por un algoritmo de votación por mayoría de 3 ciclos consecutivos, eliminando activaciones falsas o ruidos espurios transitorios (*chattering*).
 * **Limitador de Tasa Cinemática:** El ángulo continuo arrojado por el regresor está acotado por software a un incremento máximo de `4.8° por ciclo` (basado en una velocidad angular real de los servos de $300^\circ/\text{s}$ en deltas de tiempo de $20\text{ ms}$), garantizando transiciones mecánicas fluidas y previniendo el desgaste de engranajes.
 
+## 📂 Estructura del Repositorio
+
+```text
+Servos
+├─ data
+│  └─ captura.py
+├─ firmware
+│  └─ emg_bridge_v3.ino
+├─ main.py
+├─ PROYECTO.md
+├─ README.md
+├─ requirements.txt
+├─ src
+│  ├─ config.py
+│  ├─ core
+│  │  └─ serial_bridge.py
+│  ├─ models
+│  │  └─ predictor.py
+│  └─ processing
+│     ├─ dsp.py
+│     ├─ features.py
+│     └─ filtro.py
+└─ training
+   └─ train.py
+
+```
