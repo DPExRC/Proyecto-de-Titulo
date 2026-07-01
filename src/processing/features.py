@@ -64,7 +64,7 @@ def extraer_vector_features(ventanas_por_canal: list, zc_umbral: float = 0.0) ->
     NOMBRES_CANALES de config.py) y retorna el vector concatenado de
     12 features, listo para alimentar al regresor.
 
-    ventanas_por_canal: [ventana_biceps, ventana_triceps, ventana_deltoides]
+    ventanas_por_canal: [ventana_biceps, ventana_triceps, ventana_antebrazo]
     """
     vector = []
     for ventana in ventanas_por_canal:

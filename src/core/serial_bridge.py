@@ -1,21 +1,21 @@
 # =============================================================================
 # serial_bridge.py — Puente serie: muestras crudas → DSP → features → ángulos
 # =============================================================================
-# Lee tramas crudas del Arduino ("S,<v_biceps>,<v_triceps>,<v_deltoides>"),
+# Lee tramas crudas del Arduino ("S,<v_biceps>,<v_triceps>,<v_antebrazo>"),
 # aplica el pipeline DSP completo en Python (filtro IIR + ventaneo +
 # extracción de features), deposita vectores de 12 features en una cola
 # para que el hilo de control ejecute la inferencia del regresor, y envía
 # los dos ángulos calculados de vuelta al Arduino.
 #
 # Protocolo serial:
-#   Arduino → PC:  "S,<adc_biceps>,<adc_triceps>,<adc_deltoides>\n"
+#   Arduino → PC:  "S,<adc_biceps>,<adc_triceps>,<adc_antebrazo>\n"
 #                   valores enteros 0–1023 (ADC de 10 bits)
-#   PC → Arduino:  "A,<angulo_codo>,<angulo_hombro>\n"
+#   PC → Arduino:  "A,<angulo_codo>,<angulo_muneca>\n"
 #                   valores float con 1 decimal, p. ej. "A,72.3,15.0\n"
 #
 # NOTA: el firmware Arduino (emg_v3.ino) debe actualizarse para:
 #   1. Emitir tramas "S,..." en vez del formato anterior de features.
-#   2. Parsear comandos "A,<codo>,<hombro>" con dos ángulos en vez de uno.
+#   2. Parsear comandos "A,<codo>,<muneca>" con dos ángulos en vez de uno.
 #   Hasta que eso ocurra, este módulo no puede usarse con hardware real.
 # =============================================================================
 
@@ -31,7 +31,7 @@ from src.config import BAUDRATE, NOMBRES_CANALES
 from src.processing.dsp import CapturadorVentanas
 
 PREFIJO_MUESTRA = "S,"   # trama entrante: "S,<v0>,<v1>,<v2>"
-PREFIJO_ANGULO  = "A,"   # comando saliente: "A,<codo>,<hombro>"
+PREFIJO_ANGULO  = "A,"   # comando saliente: "A,<codo>,<muneca>"
 N_CANALES_ESPERADOS = len(NOMBRES_CANALES)
 
 
@@ -69,11 +69,11 @@ class SerialBridge:
             print("[SerialBridge] Desconectado.")
 
     # ------------------------------------------------------------------
-    def enviar_angulos(self, angulo_codo: float, angulo_hombro: float):
+    def enviar_angulos(self, angulo_codo: float, angulo_muneca: float):
         """Envía ambos ángulos objetivo al Arduino.
-        Protocolo: "A,<angulo_codo>,<angulo_hombro>\\n"
+        Protocolo: "A,<angulo_codo>,<angulo_muneca>\\n"
         Thread-safe: usa lock interno para no colisionar con lecturas."""
-        cmd = f"{PREFIJO_ANGULO}{angulo_codo:.1f},{angulo_hombro:.1f}\n"
+        cmd = f"{PREFIJO_ANGULO}{angulo_codo:.1f},{angulo_muneca:.1f}\n"
         with self._lock_write:
             try:
                 if self.ser and self.ser.is_open:

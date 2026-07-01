@@ -1,21 +1,21 @@
 # =============================================================================
-# train.py — Entrenamiento: RF Regresor multi-salida (codo + hombro)
+# train.py — Entrenamiento: RF Regresor multi-salida (codo + muñeca)
 # =============================================================================
 # Uso:
 #   python training/train.py
 #   python training/train.py --csv data/datos_emg.csv
 #
 # Arquitectura del sistema (v3.0, confirmada):
-#   - 3 canales sEMG: bíceps braquial, tríceps braquial, deltoides anterior
+#   - 3 canales sEMG: bíceps braquial, tríceps braquial, pronator teres (antebrazo)
 #   - 2 DOF controlados por EMG, ambos con reposo = 0°:
 #       DOF 1 — Codo: bidireccional, par antagonista bíceps/tríceps.
 #               Bíceps incrementa el ángulo (flexión); tríceps acelera el
 #               retorno hacia 0° (el rango no baja de 0°).
-#       DOF 2 — Hombro: unidireccional, canal único deltoides anterior.
+#       DOF 2 — Muñeca: unidireccional, canal único pronator teres (antebrazo).
 #   - Vector de 12 features (RMS, MAV, WL, ZC por canal), definido en
 #     config.py — no se hardcodea aquí.
 #   - Un único RandomForestRegressor multi-salida predice angulo_codo y
-#     angulo_hombro simultáneamente. Sin etapa de clasificación: el
+#     angulo_muneca simultáneamente. Sin etapa de clasificación: el
 #     gating de reposo/ruido se resuelve en el firmware/predictor
 #     mediante UMBRAL_BAJO/UMBRAL_ALTO, el filtro exponencial asimétrico
 #     y el limitador de slew-rate — no es responsabilidad de este script.
@@ -26,7 +26,7 @@
 #
 # Requiere que el CSV de entrada (generado por data/captura.py) tenga
 # las 12 columnas de NOMBRES_FEATURES definidas en config.py, más las
-# columnas COL_ANGULO_CODO y COL_ANGULO_HOMBRO. Si captura.py todavía no
+# columnas COL_ANGULO_CODO y COL_ANGULO_MUNECA. Si captura.py todavía no
 # registra ambos ángulos por separado (heredado de una versión anterior
 # de 1 solo DOF), debe actualizarse antes de poder usar este script.
 # =============================================================================
@@ -74,7 +74,7 @@ def cargar_datos(csv_path: str):
         print(f"[train] Columnas faltantes en el CSV: {faltantes}")
         print("[train] Verificar que data/captura.py genere estas "
               "columnas exactamente (ver config.py: NOMBRES_FEATURES, "
-              "COL_ANGULO_CODO, COL_ANGULO_HOMBRO).")
+              "COL_ANGULO_CODO, COL_ANGULO_MUNECA).")
         sys.exit(1)
 
     df = df.dropna(subset=cols_req)
@@ -113,7 +113,7 @@ def cargar_datos(csv_path: str):
 def entrenar_regresor(X, y, seed, test_size):
     print("\n" + "=" * 60)
     print("  Regresor multi-salida — Codo (bidireccional) + "
-          "Hombro (unidireccional)")
+          "Muñeca (unidireccional)")
     print("=" * 60)
 
     X_tr, X_te, y_tr, y_te = train_test_split(
@@ -178,7 +178,7 @@ def entrenar_regresor(X, y, seed, test_size):
 def main():
     parser = argparse.ArgumentParser(
         description="Entrenamiento del regresor EMG multi-salida "
-                     "(codo + hombro)")
+                     "(codo + muñeca)")
     parser.add_argument("--csv", default=DATA_PATH)
     parser.add_argument("--test_size", type=float, default=0.2)
     parser.add_argument("--seed", type=int, default=42)

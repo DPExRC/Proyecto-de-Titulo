@@ -2,17 +2,17 @@
 # config.py — Parámetros globales del sistema EMG (v3.0)
 # =============================================================================
 # Arquitectura confirmada:
-#   - 3 canales sEMG: bíceps braquial, tríceps braquial, deltoides anterior
+#   - 3 canales sEMG: bíceps braquial, tríceps braquial, pronator teres (antebrazo)
 #   - 2 DOF controlados por EMG:
 #       DOF 1 — Codo: bidireccional, par antagonista biceps/triceps.
 #               Reposo = 0°. Activación de bíceps incrementa el ángulo
 #               (flexión). Activación de tríceps acelera el retorno hacia 0°
 #               (no produce ángulos negativos; el piso del rango es 0°).
-#       DOF 2 — Hombro: unidireccional, canal único deltoides anterior.
+#       DOF 2 — Muñeca: unidireccional, canal único pronator teres (antebrazo).
 #               Reposo = 0°. Activación incrementa el ángulo hacia 180°.
 #   - Vector de características: RMS, MAV, WL, ZC por canal (4 x 3 = 12).
 #   - Modelo: un único RandomForestRegressor multi-salida
-#     (angulo_codo, angulo_hombro). Sin etapa de clasificación — el
+#     (angulo_codo, angulo_muneca). Sin etapa de clasificación — el
 #     gating de reposo/ruido se resuelve mediante UMBRAL_BAJO/UMBRAL_ALTO
 #     (%MVC), el filtro exponencial asimétrico y el limitador de
 #     slew-rate, igual que en el firmware Arduino.
@@ -39,7 +39,7 @@ BAUDRATE = 115200
 # ---------------------------------------------------------------------------
 # Señal EMG
 # ---------------------------------------------------------------------------
-N_CANALES   = 3                              # biceps, triceps, deltoides
+N_CANALES   = 3                              # biceps, triceps, antebrazo
 FS_TOTAL    = 1000.0                         # Hz, tasa total del ADC (Arduino)
 FS          = FS_TOTAL / N_CANALES           # Hz efectivos por canal ≈ 333.33
 VENTANA_MS  = 250                            # ms
@@ -54,7 +54,7 @@ FILTRO_CORTE_HZ     = 150.0                  # margen de seguridad bajo Nyquist
 # ---------------------------------------------------------------------------
 # Canales — nombres explícitos por índice, evita errores de orden
 # ---------------------------------------------------------------------------
-NOMBRES_CANALES = ["biceps", "triceps", "deltoides"]
+NOMBRES_CANALES = ["biceps", "triceps", "antebrazo"]
 
 # ---------------------------------------------------------------------------
 # Features
@@ -73,7 +73,7 @@ NOMBRES_FEATURES = [
 ]
 # Resultado: ['rms_biceps', 'mav_biceps', 'wl_biceps', 'zc_biceps',
 #             'rms_triceps', 'mav_triceps', 'wl_triceps', 'zc_triceps',
-#             'rms_deltoides', 'mav_deltoides', 'wl_deltoides', 'zc_deltoides']
+#             'rms_antebrazo', 'mav_antebrazo', 'wl_antebrazo', 'zc_antebrazo']
 
 # ---------------------------------------------------------------------------
 # Modelo
@@ -88,8 +88,8 @@ ANGULO_MIN = 0.0
 ANGULO_MAX = 180.0
 
 COL_ANGULO_CODO   = "angulo_codo"
-COL_ANGULO_HOMBRO = "angulo_hombro"
-COLS_TARGET       = [COL_ANGULO_CODO, COL_ANGULO_HOMBRO]
+COL_ANGULO_MUNECA = "angulo_muneca"
+COLS_TARGET       = [COL_ANGULO_CODO, COL_ANGULO_MUNECA]
 
 # Umbrales de gating en %MVC — alineados con el firmware Arduino (ver nota
 # de cabecera sobre el valor pendiente de confirmar).

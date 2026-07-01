@@ -9,10 +9,11 @@ Este proyecto implementa un sistema de control mioeléctrico distribuido en tiem
 
 El flujo de información y procesamiento se divide en tres etapas claramente definidas:
 
+```text
 [ ETAPA 1: ADQUISICIÓN (Hardware Embebido) ]
  Bíceps (A0) ------┐
  Tríceps (A1) ------├─→ Arduino Uno ──[ Transmisión Serial de Muestras Crudas ]
- Braquiorradial (A2)┘   (Puente DAQ)  
+ Deltoides (A2) ───┘   (Puente DAQ)   
 
                                │
                                ▼ [ 115200 baud ]
@@ -26,11 +27,10 @@ El flujo de información y procesamiento se divide en tres etapas claramente def
  │ 2. SEGMENTACIÓN Y EXTRACCIÓN DE FEATURES                               │
  │    - Buffer circular con ventanas deslizantes de 250 ms (Paso: 20 ms)  │
  │    - Cálculo de Características Temporales: [RMS, MAV, WL, ZCR]        │
- │    - Normalización Dinámica en base a calibración de sesión (%MVC)      │
+ │    - Normalización Dinámica en base a calibración de sesión (%MVC)     │
  ├────────────────────────────────────────────────────────────────────────┤
  │ 3. PIPELINE DE INFERENCIA DUAL (Machine Learning)                      │
  │    - StandardScaler (Escalamiento de la matriz de entrada)             │
- │    - RandomForestClassifier ──► Predice Estado Macro (0, 1 o 2)        │
  │    - RandomForestRegressor  ──► Interpola Ángulo Continuo (0°–180°)    │
  └────────────────────────────────────────────────────────────────────────┘
                                │
@@ -74,9 +74,8 @@ Sobre ventanas dinámicas de 250 ms deslizantes cada 20 ms, se calculan de maner
 * **WL** (*Waveform Length*)
 * **ZCR** (*Zero Crossing Rate*)
 
-### 3. Inferencia Jerárquica Dual
+### 3. Inferencia Jerárquica
 
-* **RandomForestClassifier (200 árboles):** Determina el estado macro intencional del usuario en tres clases discretas: `REPOSO` (Clase 0), `FLEXIÓN` (Clase 1) o `EXTENSIÓN` (Clase 2).
 * **RandomForestRegressor (200 árboles):** Si el clasificador detecta un estado activo (1 o 2), el regresor asume el control del lazo cinemático para interpolar de forma no lineal y fluida la trayectoria exacta del brazo en un rango continuo de `0° a 180°`.
 
 ---
@@ -130,7 +129,7 @@ python training/train.py
 Para iniciar la operación en vivo del sistema distribuyendo las cargas de cómputo y controlando el brazo robótico de forma continua, ejecuta el orquestador principal:
 
 ```bash
-python src/main.py
+python main.py
 
 ```
 

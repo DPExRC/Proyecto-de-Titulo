@@ -14,7 +14,7 @@
 # Protocolo serial esperado (REQUIERE actualizar emg_v3.ino para que lo
 # implemente — no está hecho todavía):
 #   Cada trama es una línea de texto:
-#     "S,<adc_biceps>,<adc_triceps>,<adc_deltoides>\n"
+#     "S,<adc_biceps>,<adc_triceps>,<adc_antebrazo>\n"
 #   con valores enteros 0–1023 (lectura cruda del ADC de 10 bits), una
 #   trama por ciclo de muestreo sincronizado (~333 Hz, los 3 canales
 #   leídos en sucesión dentro del mismo ciclo de Timer1). Si el firmware
@@ -30,14 +30,14 @@
 # que se implemente el módulo de calibración.
 #
 # Flujo por captura:
-#   1. Usuario posiciona el brazo en un ángulo de codo y de hombro
+#   1. Usuario posiciona el brazo en un ángulo de codo y de muñeca
 #      conocidos (puede dejar uno fijo en 0° y mover solo el otro).
 #   2. Escribe ambos ángulos por teclado.
 #   3. El script lee tramas crudas durante --duracion segundos, filtra
 #      cada canal, ventanea y extrae el vector de 12 features cada
 #      N_PASO muestras.
 #   4. Guarda en CSV: NOMBRES_FEATURES (12 columnas) + angulo_codo +
-#      angulo_hombro.
+#      angulo_muneca.
 #
 # El CSV acumula capturas entre ejecuciones (append).
 # Convención de ángulos (fijada para todo el proyecto): reposo = 0° en
@@ -54,11 +54,11 @@ import sys
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from src.config import (BAUDRATE, DATA_PATH, DURACION_CAPTURA_S,
                          NOMBRES_FEATURES, NOMBRES_CANALES,
-                         COLS_TARGET, COL_ANGULO_CODO, COL_ANGULO_HOMBRO,
+                         COLS_TARGET, COL_ANGULO_CODO, COL_ANGULO_MUNECA,
                          N_VENTANA, N_PASO, ANGULO_MIN, ANGULO_MAX)
 from src.processing.dsp import CapturadorVentanas
 
-PROTOCOLO_PREFIJO = "S,"   # trama cruda: "S,<v_biceps>,<v_triceps>,<v_deltoides>"
+PROTOCOLO_PREFIJO = "S,"   # trama cruda: "S,<v_biceps>,<v_triceps>,<v_antebrazo>"
 COLUMNAS_CSV = NOMBRES_FEATURES + COLS_TARGET
 
 
@@ -93,7 +93,7 @@ def esperar_calibracion(ser: serial.Serial, timeout: float = 40.0):
 
 def _parsear_trama(linea: str):
     """Parsea una trama 'S,<v0>,<v1>,<v2>'. Retorna lista de 3 floats
-    (orden: biceps, triceps, deltoides) o None si la línea es inválida."""
+    (orden: biceps, triceps, antebrazo) o None si la línea es inválida."""
     if not linea.startswith(PROTOCOLO_PREFIJO):
         return None
     partes = linea[len(PROTOCOLO_PREFIJO):].split(",")
@@ -106,11 +106,11 @@ def _parsear_trama(linea: str):
 
 
 
-def capturar_angulos(ser: serial.Serial, angulo_codo: float, angulo_hombro: float,
+def capturar_angulos(ser: serial.Serial, angulo_codo: float, angulo_muneca: float,
                       duracion_s: float, capturador: CapturadorVentanas) -> list:
     """Lee tramas crudas durante duracion_s segundos, filtra y ventanea
     en tiempo real. Devuelve lista de filas [12 features..., angulo_codo,
-    angulo_hombro]."""
+    angulo_muneca]."""
     registros = []
     t0 = time.time()
     t_ultimo_aviso = t0
@@ -125,7 +125,7 @@ def capturar_angulos(ser: serial.Serial, angulo_codo: float, angulo_hombro: floa
         if valores is not None:
             vector_features = capturador.procesar_trama(valores)
             if vector_features is not None:
-                registros.append(vector_features + [angulo_codo, angulo_hombro])
+                registros.append(vector_features + [angulo_codo, angulo_muneca])
 
         ahora = time.time()
         if ahora - t_ultimo_aviso >= 1.0:
@@ -139,10 +139,10 @@ def capturar_angulos(ser: serial.Serial, angulo_codo: float, angulo_hombro: floa
 
 def leer_angulos() -> tuple:
     """Solicita ambos ángulos objetivo por teclado. Retorna
-    (angulo_codo, angulo_hombro) o (None, None) si el usuario escribe 'q'."""
+    (angulo_codo, angulo_muneca) o (None, None) si el usuario escribe 'q'."""
     while True:
         entrada = input(
-            f"\n  Ángulos a capturar — codo,hombro (ej: '90,0'), "
+            f"\n  Ángulos a capturar — codo,muneca (ej: '90,0'), "
             f"reposo='0,0', o 'q' para terminar: "
         ).strip()
         if entrada.lower() == "q":
@@ -150,18 +150,18 @@ def leer_angulos() -> tuple:
         try:
             partes = [p.strip() for p in entrada.split(",")]
             if len(partes) != 2:
-                print("  Formato esperado: <angulo_codo>,<angulo_hombro> (ej: '90,0')")
+                print("  Formato esperado: <angulo_codo>,<angulo_muneca> (ej: '90,0')")
                 continue
-            codo, hombro = float(partes[0]), float(partes[1])
+            codo, muñeca = float(partes[0]), float(partes[1])
             if not (ANGULO_MIN <= codo <= ANGULO_MAX):
                 print(f"  angulo_codo fuera de [{ANGULO_MIN}, {ANGULO_MAX}].")
                 continue
-            if not (ANGULO_MIN <= hombro <= ANGULO_MAX):
-                print(f"  angulo_hombro fuera de [{ANGULO_MIN}, {ANGULO_MAX}].")
+            if not (ANGULO_MIN <= muñeca <= ANGULO_MAX):
+                print(f"  angulo_muneca fuera de [{ANGULO_MIN}, {ANGULO_MAX}].")
                 continue
-            return codo, hombro
+            return codo, muñeca
         except ValueError:
-            print("  Entrada no válida. Formato: <angulo_codo>,<angulo_hombro>")
+            print("  Entrada no válida. Formato: <angulo_codo>,<angulo_muneca>")
 
 
 def resumen_csv(path: str):
@@ -173,14 +173,14 @@ def resumen_csv(path: str):
         reader = csv.DictReader(f)
         for fila in reader:
             try:
-                key = (float(fila[COL_ANGULO_CODO]), float(fila[COL_ANGULO_HOMBRO]))
+                key = (float(fila[COL_ANGULO_CODO]), float(fila[COL_ANGULO_MUNECA]))
                 combinaciones[key] = combinaciones.get(key, 0) + 1
             except (ValueError, KeyError):
                 pass
     if combinaciones:
-        print("\n[captura] Distribución actual del dataset (codo°, hombro°):")
-        for (codo, hombro) in sorted(combinaciones):
-            print(f"  ({codo:6.1f}°, {hombro:6.1f}°)  →  {combinaciones[(codo, hombro)]:4d} vectores")
+        print("\n[captura] Distribución actual del dataset (codo°, muñeca°):")
+        for (codo, muñeca) in sorted(combinaciones):
+            print(f"  ({codo:6.1f}°, {muñeca:6.1f}°)  →  {combinaciones[(codo, muñeca)]:4d} vectores")
 
 
 # ------------------------------------------------------------------------------
@@ -198,7 +198,7 @@ def main():
     print("  Captura de Dataset EMG — DSP completo en Python")
     print(f"  Puerto: {args.port}  |  {args.duracion}s por captura")
     print(f"  Canales: {NOMBRES_CANALES}")
-    print(f"  Convención: reposo = 0° en ambos DOF (codo y hombro)")
+    print(f"  Convención: reposo = 0° en ambos DOF (codo y muñeca)")
     print("  NOTA: features sin normalizar %MVC (módulo de calibración")
     print("        pendiente — ver cabecera de este archivo)")
     print("=" * 60)
@@ -233,19 +233,19 @@ def main():
         print("          deseados y mantén la posición durante la captura.")
 
         while True:
-            angulo_codo, angulo_hombro = leer_angulos()
+            angulo_codo, angulo_muneca = leer_angulos()
             if angulo_codo is None:
                 break
 
             print(f"\n  Prepárate para mantener codo={angulo_codo:.0f}°, "
-                  f"hombro={angulo_hombro:.0f}° durante {args.duracion}s...")
+                  f"muneca={angulo_muneca:.0f}° durante {args.duracion}s...")
             for s in range(3, 0, -1):
                 print(f"  {s}...", end="\r")
                 time.sleep(1.0)
-            print(f"  ¡CAPTURANDO codo={angulo_codo:.0f}°, hombro={angulo_hombro:.0f}°!   ")
+            print(f"  ¡CAPTURANDO codo={angulo_codo:.0f}°, muneca={angulo_muneca:.0f}°!   ")
 
             capturador.reset()  # evita arrastrar transitorios del filtro
-            registros = capturar_angulos(ser, angulo_codo, angulo_hombro,
+            registros = capturar_angulos(ser, angulo_codo, angulo_muneca,
                                           args.duracion, capturador)
 
             for reg in registros:
@@ -254,7 +254,7 @@ def main():
 
             total += len(registros)
             print(f"  ✓ {len(registros)} vectores guardados "
-                  f"(codo={angulo_codo:.0f}°, hombro={angulo_hombro:.0f}°)  "
+                  f"(codo={angulo_codo:.0f}°, muneca={angulo_muneca:.0f}°)  "
                   f"(total acumulado: {total})")
 
             continuar = input("  ¿Capturar otra combinación? [Enter=sí / q=salir]: ").strip().lower()
