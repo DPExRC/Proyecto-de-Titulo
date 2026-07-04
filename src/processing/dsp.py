@@ -2,14 +2,17 @@
 # dsp.py — Pipeline DSP en Python: filtrado IIR + ventaneo + features
 # =============================================================================
 # Módulo compartido entre data/captura.py (entrenamiento) y
-# src/serial_bridge.py (inferencia en producción). No duplicar esta
-# lógica en ningún otro script — importar desde aquí.
+# src/serial_bridge.py (inferencia en producción).
 #
 # CapturadorVentanas mantiene el estado de filtrado y ventaneo por canal
-# y emite un vector de 12 features (RMS, MAV, WL, ZC x 3 canales) cada
+# y emite un vector de 12 features (RMS, MAV, WL, ZCR x 3 canales) cada
 # vez que se acumulan N_PASO muestras nuevas sobre una ventana llena de
 # N_VENTANA muestras filtradas, siguiendo la cadencia de actualización
 # de PASO_MS ms (≈ 50 Hz, definida en config.py).
+# =============================================================================
+
+# =============================================================================
+# dsp.py — Pipeline DSP en Python: filtrado IIR + ventaneo + features
 # =============================================================================
 
 import os
@@ -18,7 +21,7 @@ from collections import deque
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from src.config import NOMBRES_CANALES, N_VENTANA, N_PASO
-from src.processing.filtro import crear_filtros_por_canal
+from src.processing.filter import crear_filtros_por_canal
 from src.processing.features import extraer_vector_features
 
 
@@ -42,11 +45,7 @@ class CapturadorVentanas:
         self._contador = 0
 
     def procesar_trama(self, valores_crudos: list):
-        """Procesa una trama de N_CANALES muestras crudas (una por canal,
-        en el orden de NOMBRES_CANALES). Retorna el vector de 12 features
-        si se completó un paso de ventaneo, o None si aún no hay
-        suficientes muestras o no han pasado N_PASO muestras desde el
-        último vector emitido."""
+        """Procesa una trama de N_CANALES muestras crudas (una por canal)."""
         for nombre, crudo in zip(NOMBRES_CANALES, valores_crudos):
             filtrada = self.filtros[nombre].procesar(crudo)
             self.buffers[nombre].append(filtrada)

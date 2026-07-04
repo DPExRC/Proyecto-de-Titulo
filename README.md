@@ -1,170 +1,158 @@
 <!-- markdownlint-disable-file MD046 -->
-# Interfaz Míoeléctrica Híbrida para el Control de un Brazo Robótico (sEMG)
+# Sistema EMG para control de brazo robótico
 
-Este proyecto implementa un sistema de control mioeléctrico distribuido en tiempo real para un brazo robótico articulado mediante señales electromiográficas de superficie (sEMG). La arquitectura del sistema optimiza el uso de hardware mediante un esquema de **procesamiento descentralizado (offload)**, delegando las tareas matemáticas de alta carga computacional y la inferencia de Machine Learning a una PC, mientras que el microcontrolador actúa estrictamente como un puente de adquisición y pasarela de control mecánico.
+Este proyecto implementa un flujo completo de adquisición, procesamiento y control en tiempo real de señales electromiográficas de superficie (sEMG) para mover un brazo robótico mediante dos grados de libertad: codo y muñeca.
+
+La arquitectura actual está organizada en tres capas:
+
+1. Firmware embebido en Arduino para adquisición y transmisión de muestras.
+2. Procesamiento digital en Python para filtrado, extracción de características y normalización.
+3. Inferencia con un modelo de regresión basado en RandomForest para producir ángulos de referencia.
 
 ---
 
-## 🚀 Arquitectura General del Sistema
+## ✅ Estado actual del proyecto
 
-El flujo de información y procesamiento se divide en tres etapas claramente definidas:
+La versión actual del repositorio incluye:
+
+- Captura de datos EMG desde Arduino mediante puerto serial.
+- Extracción de características temporales RMS, MAV, WL y ZCR por canal.
+- Calibración baseline/MVC por sesión.
+- Normalización offline a porcentaje de MVC.
+- Entrenamiento de un modelo de regresión multi-salida para codo y muñeca.
+- Modo interactivo principal en Python para entrenar o usar el sistema.
+
+---
+
+## 🔧 Arquitectura
 
 ```text
-[ ETAPA 1: ADQUISICIÓN (Hardware Embebido) ]
- Bíceps (A0) ------┐
- Tríceps (A1) ------├─→ Arduino Uno ──[ Transmisión Serial de Muestras Crudas ]
- Deltoides (A2) ───┘   (Puente DAQ)   
+[Hardware]
+Arduino Uno ──> Lecturas analógicas (3 canales sEMG)
 
-                               │
-                               ▼ [ 115200 baud ]
-                               │
+[Procesamiento en PC]
+Python ──> Filtrado + ventanas + features + normalización %MVC ──> modelo
 
-[ ETAPA 2: DSP Y ML DUAL (PC - Módulo Python) ]
- ┌────────────────────────────────────────────────────────────────────────┐
- │ 1. FILTRADO DIGITAL (DSP)                                              │
- │    - Filtro IIR Butterworth Pasabanda (20–200 Hz, Orden 4, DF-I)       │
- ├────────────────────────────────────────────────────────────────────────┤
- │ 2. SEGMENTACIÓN Y EXTRACCIÓN DE FEATURES                               │
- │    - Buffer circular con ventanas deslizantes de 250 ms (Paso: 20 ms)  │
- │    - Cálculo de Características Temporales: [RMS, MAV, WL, ZCR]        │
- │    - Normalización Dinámica en base a calibración de sesión (%MVC)     │
- ├────────────────────────────────────────────────────────────────────────┤
- │ 3. PIPELINE DE INFERENCIA DUAL (Machine Learning)                      │
- │    - StandardScaler (Escalamiento de la matriz de entrada)             │
- │    - RandomForestRegressor  ──► Interpola Ángulo Continuo (0°–180°)    │
- └────────────────────────────────────────────────────────────────────────┘
-                               │
-                               ▼ [ Comandos de Ángulo Suavizados ]
-                               │
+[Control]
+Python ──> comandos angulares ──> Arduino ──> servomotores
+```
 
-[ ETAPA 3: CONTROL CINEMÁTICO ]
- PC Python ───→ Arduino Uno (Pasarela Serial-I2C) ───→ Driver PCA9685 ───→ Servos KS-3518
+El flujo actual usa estas señales y características:
 
-1. **Adquisición (Arduino Uno):** Configurado mediante interrupciones de hardware para muestrear de forma alternada 3 canales analógicos a una tasa consolidada de 1000 Hz. Envía las lecturas crudas del ADC sin procesar para evitar cuellos de botella por restricciones de SRAM.
-2. **Procesamiento y Predicción (PC):** Módulo en Python que realiza el filtrado digital IIR, extrae características en ventanas móviles de 250 ms, normaliza los datos respecto a la Máxima Contracción Voluntaria (%MVC) y ejecuta un pipeline predictivo dual (Clasificación para estados macro + Regresión para interpolación angular continua).
-3. **Control Mecánico:** La PC retorna las directrices angulares calculadas hacia el Arduino Uno, el cual despacha los setpoints por bus I2C al módulo PWM PCA9685 para mover los servomotores de alta torsión de la estructura robótica.
+- 3 canales sEMG: bíceps, tríceps y antebrazo.
+- 12 features: RMS, MAV, WL y ZCR por canal.
+- 2 DOF controlados: codo y muñeca.
+- Modelo: RandomForestRegressor multi-salida.
 
 ---
 
-## 🛠️ Especificaciones de Hardware
+## 🧰 Requisitos
 
-| Componente | Conexión Física | Propósito |
-| --- | --- | --- |
-| Sensor sEMG Bíceps | Entrada Analógica **A0** | Captura de dinámica flexora del codo |
-| Sensor sEMG Tríceps | Entrada Analógica **A1** | Captura de dinámica extensora del codo |
-| Sensor sEMG Braquiorradial | Entrada Analógica **A2** | Captura de dinámicas de asistencia y rotación |
-| Servomotores KS-3518 | Canales 0, 1 y 2 (PCA9685) | Actuadores de las articulaciones (0° - 180°) |
-| Líneas de Control I2C | Pins **A4 (SDA)** y **A5 (SCL)** | Bus de comunicación hacia el driver PWM |
-| Fuente de Poder Externa | Bornes V+ / GND del PCA9685 | Línea dedicada regulada a 5V/2A para evitar caídas de tensión |
-
----
-
-## 📊 Pipeline Digital de Señales (DSP) y Machine Learning
-
-### 1. Filtrado Digital
-
-Para mitigar el ruido de baja frecuencia y evitar el solapamiento (*aliasing*) respetando el límite estricto de Nyquist por canal en la tasa de transferencia, se aplica un filtro digital **IIR Butterworth Pasabanda de 20 Hz a 200 Hz (Orden 4)** implementado en Direct Form I en Python.
-
-### 2. Extracción de Características (*Features*)
-
-Sobre ventanas dinámicas de 250 ms deslizantes cada 20 ms, se calculan de manera simultánea cuatro métricas en el dominio del tiempo por cada canal:
-
-* **RMS** (*Root Mean Square*)
-* **MAV** (*Mean Absolute Value*)
-* **WL** (*Waveform Length*)
-* **ZCR** (*Zero Crossing Rate*)
-
-### 3. Inferencia Jerárquica
-
-* **RandomForestRegressor (200 árboles):** Si el clasificador detecta un estado activo (1 o 2), el regresor asume el control del lazo cinemático para interpolar de forma no lineal y fluida la trayectoria exacta del brazo en un rango continuo de `0° a 180°`.
-
----
-
-## 🔧 Configuración e Instalación
-
-### 1. Despliegue del Firmware
-
-1. Conecta el Arduino Uno a tu computadora mediante el cable USB.
-2. Abre el IDE de Arduino y carga el archivo ubicado en `firmware/emg_v3/emg_v3.ino`.
-3. Instala la dependencia requerida desde el Gestor de Librerías: `Adafruit PWM Servo Driver Library`.
-4. Sube (*Upload*) el programa al microcontrolador. Abre el Monitor Serie a **115200 baud** y verifica que imprima la cadena `READY`.
-
-### 2. Configuración del Entorno Python
-
-Asegúrate de contar con Python 3.8 o superior e instala los paquetes necesarios provistos en el archivo de requerimientos:
+- Python 3.9 o superior.
+- Arduino con firmware compatible.
+- Dependencias Python:
 
 ```bash
 pip install -r requirements.txt
-
+pip install rich
 ```
 
 ---
 
-## 💻 Flujo de Trabajo Operacional
+## 📦 Instalación y uso
 
-### Paso 1: Captura de Datos (*Dataset de Calibración*)
+### 1. Subir el firmware
 
-Para entrenar los modelos con tus propios patrones musculares, ejecuta el script de captura ejecutando rutinas para las distintas posiciones angulares fijadas para la calibración:
+Carga el archivo de firmware en el Arduino desde:
 
-```bash
-python data/captura.py --port COM3 --duracion 5 --rondas 5
+- [firmware/emg_bridge_v4.ino](firmware/emg_bridge_v4.ino)
 
-```
+Asegúrate de abrir el monitor serie a 115200 baudios y verificar que el firmware responda con READY.
 
-*Este comando registrará ventanas sincronizadas de señales asociadas al ángulo objetivo y poblará de forma iterativa el archivo `data/datos_emg.csv`.*
+### 2. Ejecutar la interfaz principal
 
-### Paso 2: Entrenamiento del Pipeline Dual
-
-Una vez construido el dataset, ejecuta el script de entrenamiento para validar y serializar los modelos inteligentes:
-
-```bash
-python training/train.py
-
-```
-
-*El script procesará la información, aplicará esquemas de validación cruzada (`StratifiedKFold` para clasificación y `KFold` para regresión), imprimirá matrices de confusión, el error absoluto medio (MAE) desglosado por rangos de movimiento y exportará los archivos `.pkl` resultantes en la carpeta `models/`.*
-
-### Paso 3: Ejecución en Producción (Tiempo Real)
-
-Para iniciar la operación en vivo del sistema distribuyendo las cargas de cómputo y controlando el brazo robótico de forma continua, ejecuta el orquestador principal:
+Desde la raíz del proyecto:
 
 ```bash
 python main.py
-
 ```
 
-*(Nota: Si tu puerto serie difiere de `COM3`, puedes modificarlo directamente en `src/config.py`).*
+El menú ofrece dos modos:
+
+- Entrenar: calibra, captura datos, normaliza y entrena el modelo.
+- Usar: carga la calibración y el modelo entrenado para inferencia en tiempo real.
+
+### 3. Flujo recomendado
+
+#### Captura de datos
+
+```bash
+python data/capture.py --port COM5 --duracion 5
+```
+
+Esto genera un archivo CSV con características crudas en:
+
+- [data/datos_emg.csv](data/datos_emg.csv)
+
+#### Normalización %MVC
+
+```bash
+python src/processing/standardization.py
+```
+
+Esto produce:
+
+- [data/datos_emg_normalizado.csv](data/datos_emg_normalizado.csv)
+
+#### Entrenamiento del modelo
+
+```bash
+python training/train_model.py
+```
+
+El modelo entrenado se guarda en:
+
+- [models/modelo_regresor.pkl](models/modelo_regresor.pkl)
+- [models/meta_entrenamiento.json](models/meta_entrenamiento.json)
 
 ---
 
-## 🔒 Mecanismos de Robustez y Seguridad
-
-* **Filtro de Histéresis Temporal:** Las decisiones del clasificador pasan por un algoritmo de votación por mayoría de 3 ciclos consecutivos, eliminando activaciones falsas o ruidos espurios transitorios (*chattering*).
-* **Limitador de Tasa Cinemática:** El ángulo continuo arrojado por el regresor está acotado por software a un incremento máximo de `4.8° por ciclo` (basado en una velocidad angular real de los servos de $300^\circ/\text{s}$ en deltas de tiempo de $20\text{ ms}$), garantizando transiciones mecánicas fluidas y previniendo el desgaste de engranajes.
-
-## 📂 Estructura del Repositorio
+## 📁 Estructura del repositorio
 
 ```text
-Servos
-├─ data
-│  └─ captura.py
-├─ firmware
-│  └─ emg_bridge_v3.ino
-├─ main.py
-├─ PROYECTO.md
-├─ README.md
-├─ requirements.txt
-├─ src
-│  ├─ config.py
-│  ├─ core
-│  │  └─ serial_bridge.py
-│  ├─ models
-│  │  └─ predictor.py
-│  └─ processing
-│     ├─ dsp.py
-│     ├─ features.py
-│     └─ filtro.py
-└─ training
-   └─ train.py
-
+Servos/
+├── data/
+│   ├── capture.py
+│   ├── calibracion.json
+│   ├── datos_emg.csv
+│   └── datos_emg_normalizado.csv
+├── firmware/
+│   └── emg_bridge_v4.ino
+├── models/
+│   └── meta_entrenamiento.json
+├── src/
+│   ├── config.py
+│   ├── core/
+│   │   └── serial_bridge.py
+│   ├── models/
+│   │   └── predictor.py
+│   └── processing/
+│       ├── calibration.py
+│       ├── dsp.py
+│       ├── features.py
+│       ├── filter.py
+│       └── standardization.py
+├── training/
+│   └── train_model.py
+├── main.py
+├── requirements.txt
+└── README.md
 ```
+
+---
+
+## 📝 Notas importantes
+
+- El puerto serial por defecto está definido en [src/config.py](src/config.py).
+- Si cambias la forma de capturar datos o la calibración, conviene recalcular la normalización antes de entrenar.
+- El sistema está pensado para funcionar en sesiones de calibración y uso consistentes, ya que la normalización depende de la calibración registrada.

@@ -19,16 +19,25 @@
 #   Hasta que eso ocurra, este módulo no puede usarse con hardware real.
 # =============================================================================
 
+import os
+import sys
+
+# Ajuste dinámico de sys.path para que detecte la raíz del proyecto 'Servos'
+# os.path.dirname(__file__) es 'src/core'
+# El primer '..' sube a 'src', el segundo '..' sube a 'Servos'
+root_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+if root_path not in sys.path:
+    sys.path.insert(0, root_path)
+
 import serial
 import threading
 import queue
 import time
-import os
-import sys
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+# Ahora las importaciones absolutas desde la raíz funcionarán correctamente
 from src.config import BAUDRATE, NOMBRES_CANALES
 from src.processing.dsp import CapturadorVentanas
+from src.processing.calibration import CalibradorEMG
 
 PREFIJO_MUESTRA = "S,"   # trama entrante: "S,<v0>,<v1>,<v2>"
 PREFIJO_ANGULO  = "A,"   # comando saliente: "A,<codo>,<muneca>"
@@ -50,6 +59,19 @@ class SerialBridge:
         self.baudrate  = baudrate
         self.ser: serial.Serial | None = None
         self._lock_write = threading.Lock()
+        self.calibrador = CalibradorEMG()
+
+    def ejecutar_calibracion(self, duracion_reposo_s: float = 3.0,
+                              duracion_mvc_s: float = 3.0) -> bool:
+        """Realiza la calibración baseline/MVC en el puerto serie abierto."""
+        if not self.ser or not self.ser.is_open:
+            print("[SerialBridge] No hay conexión serie activa para calibrar.")
+            return False
+
+        capturador = CapturadorVentanas()
+        self.calibrador.ejecutar(self.ser, capturador,
+                                 duracion_reposo_s, duracion_mvc_s)
+        return self.calibrador.calibrado
 
     # ------------------------------------------------------------------
     def conectar(self) -> bool:
@@ -130,6 +152,8 @@ class SerialBridge:
             vector = capturador.procesar_trama(valores)
             if vector is None:
                 continue
+
+            vector = self.calibrador.normalizar(vector)
 
             # Depositar en cola, descartando el más antiguo si está llena
             if cola_features.full():

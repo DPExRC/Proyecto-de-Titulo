@@ -28,10 +28,13 @@
 #include <avr/interrupt.h>
 #include <Wire.h>
 #include <Adafruit_PWMServoDriver.h>
+#include <io90pwm1.h>
+#include <HardwareSerial.h>
+#include <USBAPI.h>
 
 // ---------------------------------------------------------------------------
 // PCA9685
-// ---------------------------------------------------------------------------
+// --------------------------------------------------------------------------
 Adafruit_PWMServoDriver pca = Adafruit_PWMServoDriver(0x40);
 
 #define CANAL_SERVO_CODO    0

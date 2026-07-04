@@ -1,7 +1,7 @@
 # =============================================================================
 # features.py — Extracción de características temporales por canal
 # =============================================================================
-# Módulo nuevo. Centraliza el cálculo de RMS, MAV, WL y ZC para que
+# Módulo nuevo. Centraliza el cálculo de RMS, MAV, WL y ZCR para que
 # captura.py (entrenamiento) y predictor.py (inferencia en tiempo real)
 # usen exactamente la misma implementación. No reimplementar estas
 # fórmulas por separado en otros scripts — importar desde aquí.
@@ -30,7 +30,7 @@ def wl(ventana: np.ndarray) -> float:
     return float(np.sum(np.abs(np.diff(ventana))))
 
 
-def zc(ventana: np.ndarray, umbral: float = 0.0) -> int:
+def ZCR(ventana: np.ndarray, umbral: float = 0.0) -> int:
     """Cruces por cero (Zero Crossings), con umbral mínimo de variación
     para descartar cruces producidos por ruido de baja amplitud."""
     signos = np.sign(ventana)
@@ -48,14 +48,14 @@ def zc(ventana: np.ndarray, umbral: float = 0.0) -> int:
 
 
 def extraer_features_canal(ventana: np.ndarray, zc_umbral: float = 0.0) -> list:
-    """Retorna [rms, mav, wl, zc] para un canal, en el orden fijado por
+    """Retorna [rms, mav, wl, ZCR] para un canal, en el orden fijado por
     NOMBRES_FEATURES_POR_CANAL en config.py. No alterar el orden sin
     actualizar config.py también."""
     return [
         rms(ventana),
         mav(ventana),
         wl(ventana),
-        zc(ventana, umbral=zc_umbral),
+        ZCR(ventana, umbral=zc_umbral),
     ]
 
 
@@ -79,4 +79,4 @@ if __name__ == "__main__":
     print("RMS esperado ≈ A/√2 = 35.36 — calculado:", rms(senal))
     print("MAV:", mav(senal))
     print("WL:", wl(senal))
-    print("ZC:", zc(senal))
+    print("ZCR:", ZCR(senal))

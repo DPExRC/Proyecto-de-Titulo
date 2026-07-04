@@ -10,7 +10,7 @@
 #               (no produce ángulos negativos; el piso del rango es 0°).
 #       DOF 2 — Muñeca: unidireccional, canal único pronator teres (antebrazo).
 #               Reposo = 0°. Activación incrementa el ángulo hacia 180°.
-#   - Vector de características: RMS, MAV, WL, ZC por canal (4 x 3 = 12).
+#   - Vector de características: RMS, MAV, WL, ZCR por canal (4 x 3 = 12).
 #   - Modelo: un único RandomForestRegressor multi-salida
 #     (angulo_codo, angulo_muneca). Sin etapa de clasificación — el
 #     gating de reposo/ruido se resuelve mediante UMBRAL_BAJO/UMBRAL_ALTO
@@ -32,14 +32,19 @@ import os
 # ---------------------------------------------------------------------------
 # Puerto serial
 # ---------------------------------------------------------------------------
-PORT     = "COM3"       # Cambiar según sistema operativo (Linux: /dev/ttyUSB0)
+PORT     = "COM5"       # Cambiar según sistema operativo (Linux: /dev/ttyUSB0)
 BAUDRATE = 115200
 
 
 # ---------------------------------------------------------------------------
+# Canales — nombres explícitos por índice, evita errores de orden
+# ---------------------------------------------------------------------------
+NOMBRES_CANALES = ["biceps", "triceps", "antebrazo"]
+
+# ---------------------------------------------------------------------------
 # Señal EMG
 # ---------------------------------------------------------------------------
-N_CANALES   = 3                              # biceps, triceps, antebrazo
+N_CANALES   = len(NOMBRES_CANALES)                              
 FS_TOTAL    = 1000.0                         # Hz, tasa total del ADC (Arduino)
 FS          = FS_TOTAL / N_CANALES           # Hz efectivos por canal ≈ 333.33
 VENTANA_MS  = 250                            # ms
@@ -51,18 +56,15 @@ N_PASO      = round(FS * PASO_MS / 1000)     # ≈ 7 muestras por canal
 NYQUIST_EFECTIVO_HZ = FS / 2.0               # ≈ 166.7 Hz
 FILTRO_CORTE_HZ     = 150.0                  # margen de seguridad bajo Nyquist
 
-# ---------------------------------------------------------------------------
-# Canales — nombres explícitos por índice, evita errores de orden
-# ---------------------------------------------------------------------------
-NOMBRES_CANALES = ["biceps", "triceps", "antebrazo"]
+
 
 # ---------------------------------------------------------------------------
 # Features
 # ---------------------------------------------------------------------------
-# Vector: 4 características temporales (RMS, MAV, WL, ZC) por cada uno de
+# Vector: 4 características temporales (RMS, MAV, WL, ZCR) por cada uno de
 # los 3 canales = 12 columnas. Orden fijo, usado tanto en captura como en
 # entrenamiento e inferencia — no reordenar sin actualizar los tres scripts.
-NOMBRES_FEATURES_POR_CANAL = ["rms", "mav", "wl", "zc"]
+NOMBRES_FEATURES_POR_CANAL = ["rms", "mav", "wl", "ZCR"]
 N_FEATURES_POR_CANAL = len(NOMBRES_FEATURES_POR_CANAL)
 N_FEATURES = N_FEATURES_POR_CANAL * N_CANALES  # 12
 

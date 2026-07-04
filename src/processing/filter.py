@@ -1,5 +1,5 @@
 # =============================================================================
-# filtro.py — Filtro IIR Butterworth pasabanda, con estado, por canal
+# filter.py — Filtro IIR Butterworth pasabanda, con estado, por canal
 # =============================================================================
 # Reemplaza el filtrado que antes hacía el Arduino (versión de 1 canal).
 # En la arquitectura confirmada, el Arduino solo transmite muestras

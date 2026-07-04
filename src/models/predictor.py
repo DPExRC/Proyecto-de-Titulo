@@ -2,7 +2,7 @@
 # predictor.py — Inferencia en tiempo real: RF regresor multi-salida
 # =============================================================================
 # Flujo por ciclo (cada PASO_MS, ver config.py):
-#   1. Recibe el vector de 12 features (RMS, MAV, WL, ZC x 3 canales),
+#   1. Recibe el vector de 12 features (RMS, MAV, WL, ZCR x 3 canales),
 #      ya calculado aguas arriba (módulo de DSP en Python).
 #   2. El regresor predice angulo_codo y angulo_muneca simultáneamente.
 #   3. Si el modelo no está disponible, usa un fallback proporcional por
@@ -116,7 +116,7 @@ class EMGPredictor:
         Parámetros
         ----------
         features : vector de 12 valores, en el orden de
-                   config.NOMBRES_FEATURES (RMS, MAV, WL, ZC x 3 canales).
+                   config.NOMBRES_FEATURES (RMS, MAV, WL, ZCR x 3 canales).
 
         Retorna
         -------
