@@ -56,6 +56,12 @@ N_PASO      = round(FS * PASO_MS / 1000)     # ≈ 7 muestras por canal
 NYQUIST_EFECTIVO_HZ = FS / 2.0               # ≈ 166.7 Hz
 FILTRO_CORTE_HZ     = 150.0                  # margen de seguridad bajo Nyquist
 
+# Parámetros del filtro digital EMG (centralizados para facilitar ajustes)
+FILTRO_NOTCH_FREQ_HZ = 50.0
+FILTRO_NOTCH_Q = 30.0
+FILTRO_BANDPASS_LOW_HZ = 20.0
+FILTRO_BANDPASS_HIGH_HZ = 150.0
+FILTRO_BUTTERWORTH_ORDER = 4
 
 
 # ---------------------------------------------------------------------------

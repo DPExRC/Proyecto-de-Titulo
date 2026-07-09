@@ -1,120 +1,125 @@
 # =============================================================================
-# filter.py — Filtro IIR Butterworth pasabanda, con estado, por canal
+# filtro.py — Procesamiento Digital de Señales (DSP) en tiempo real
 # =============================================================================
-# Reemplaza el filtrado que antes hacía el Arduino (versión de 1 canal).
-# En la arquitectura confirmada, el Arduino solo transmite muestras
-# crudas; este módulo aplica el filtro digital en Python, sobre cada
-# canal de forma independiente.
+# Ubicación prevista: src/processing/filtro.py
 #
-# Los coeficientes se calculan en tiempo de ejecución a partir de los
-# parámetros de config.py (FS, FILTRO_CORTE_HZ), en vez de hardcodearse
-# como constantes sueltas — evita repetir el problema ya detectado en
-# el informe de tener 2-3 valores de corte distintos circulando entre
-# capítulos y archivos.
+# Aplica secuencialmente, por canal:
+#   1. Filtro Notch (50 Hz) — elimina interferencia de la red eléctrica.
+#   2. Filtro Pasabanda Butterworth (20-150 Hz) — aísla la banda útil sEMG.
 #
-# Diseño: Butterworth orden 4, pasabanda [20, FILTRO_CORTE_HZ] Hz,
-# implementado en secciones de segundo orden (SOS) por estabilidad
-# numérica en uso de streaming en tiempo real (preferible a la forma
-# directa I con coeficientes b/a sueltos, que es más sensible a errores
-# de redondeo en filtros de orden alto).
+# Ambos filtros usan estado (`zi`) persistente entre llamadas, para evitar
+# discontinuidades matemáticas al procesar muestra a muestra en tiempo
+# real (en vez de procesar el audio/señal completa de una sola vez).
+#
+# INTERFAZ REQUERIDA por dsp.py (CapturadorVentanas):
+#   - crear_filtros_por_canal() -> dict {nombre_canal: FiltroEMG}
+#   - FiltroEMG.procesar(valor_float) -> float   (UNA muestra, no un chunk)
+#   - FiltroEMG.reset() -> None
+#
+# NOTA: internamente, `lfilter` puede procesar arrays de cualquier
+# longitud (incluida longitud 1) sin perder el estado `zi`, así que
+# procesar muestra por muestra es tan matemáticamente correcto como
+# procesar en chunks — solo se envuelve el valor en un array de 1
+# elemento y se extrae el resultado escalar de vuelta.
 # =============================================================================
 
 import numpy as np
-from scipy.signal import butter, sosfilt
+from scipy.signal import butter, lfilter, lfilter_zi, iirnotch
 
-import os
-import sys
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-from src.config import FS, FILTRO_CORTE_HZ, NOMBRES_CANALES
+from src.config import (
+    NOMBRES_CANALES,
+    FS_TOTAL,
+    FILTRO_NOTCH_FREQ_HZ,
+    FILTRO_NOTCH_Q,
+    FILTRO_BANDPASS_LOW_HZ,
+    FILTRO_BANDPASS_HIGH_HZ,
+    FILTRO_BUTTERWORTH_ORDER,
+)
 
-FRECUENCIA_BAJA_HZ = 20.0  # límite inferior de la banda pasante, fijo
 
+class FiltroEMG:
+    """
+    Filtro digital en tiempo real para señales sEMG.
+    Aplica secuencialmente:
+    1. Filtro Notch (50 Hz) para eliminar la interferencia de la red eléctrica.
+    2. Filtro Pasabanda Butterworth (20-150 Hz) para aislar la señal muscular útil.
+    """
+    def __init__(self, fs=1000.0, lowcut=FILTRO_BANDPASS_LOW_HZ, highcut=FILTRO_BANDPASS_HIGH_HZ,
+                 notch_freq=FILTRO_NOTCH_FREQ_HZ, notch_q=FILTRO_NOTCH_Q, order=FILTRO_BUTTERWORTH_ORDER):
+        self.fs = fs
 
-def _validar_nyquist():
-    nyquist = FS / 2.0
-    if FILTRO_CORTE_HZ >= nyquist:
-        raise ValueError(
-            f"FILTRO_CORTE_HZ ({FILTRO_CORTE_HZ} Hz) debe ser menor que "
-            f"el Nyquist efectivo ({nyquist:.1f} Hz) derivado de FS "
-            f"({FS:.2f} Hz/canal en config.py). Revisar N_CANALES o "
-            f"FILTRO_CORTE_HZ."
+        # --- 1. Configuración del Filtro Notch (50 Hz) ---
+        # notch_q = 30 es un valor estándar clínico (hace que el corte sea muy estrecho)
+        self.b_notch, self.a_notch = iirnotch(notch_freq, notch_q, fs)
+        self.zi_notch = lfilter_zi(self.b_notch, self.a_notch)
+
+        # --- 2. Configuración del Filtro Pasabanda (20 - 150 Hz) ---
+        nyq = 0.5 * fs
+        low = lowcut / nyq
+        high = highcut / nyq
+        self.b_band, self.a_band = butter(order, [low, high], btype='band')
+        self.zi_band = lfilter_zi(self.b_band, self.a_band)
+
+    def procesar_chunk(self, chunk):
+        """
+        Procesa un arreglo (chunk) de muestras entrantes.
+        Mantiene el estado 'zi' para evitar discontinuidades matemáticas
+        entre las ventanas de datos en tiempo real.
+        """
+        # 1. Aplicar Filtro Notch para matar el ruido de 50Hz
+        notch_out, self.zi_notch = lfilter(
+            self.b_notch, self.a_notch, chunk, zi=self.zi_notch
         )
 
+        # 2. Aplicar Filtro Pasabanda para aislar la banda EMG útil
+        band_out, self.zi_band = lfilter(
+            self.b_band, self.a_band, notch_out, zi=self.zi_band
+        )
 
-def diseñar_sos():
-    """Calcula los coeficientes SOS del filtro, una sola vez."""
-    _validar_nyquist()
-    sos = butter(
-        N=4,
-        Wn=[FRECUENCIA_BAJA_HZ, FILTRO_CORTE_HZ],
-        btype="bandpass",
-        fs=FS,
-        output="sos",
-    )
-    return sos
+        return band_out
 
-
-# Coeficientes compartidos por todas las instancias de FiltroCanal —
-# se calculan una sola vez al importar el módulo.
-SOS_GLOBAL = diseñar_sos()
-
-
-class FiltroCanal:
-    """Filtro IIR con estado para un único canal. Procesa una muestra
-    a la vez, manteniendo el estado interno entre llamadas (necesario
-    para uso en streaming en tiempo real, a diferencia de filtrar un
-    arreglo completo de una sola vez)."""
-
-    def __init__(self, nombre_canal: str = ""):
-        self.nombre_canal = nombre_canal
-        self.sos = SOS_GLOBAL
-        # Estado inicial en cero (n_secciones, 2)
-        self.zi = np.zeros((self.sos.shape[0], 2))
-
-    def procesar(self, muestra: float) -> float:
-        """Filtra una única muestra cruda y retorna el valor filtrado."""
-        salida, self.zi = sosfilt(self.sos, [muestra], zi=self.zi)
+    def procesar(self, valor: float) -> float:
+        """Procesa UNA muestra individual (interfaz que espera dsp.py:
+        CapturadorVentanas.procesar_trama() llama esto una vez por
+        muestra cruda, no por chunk). Internamente reutiliza
+        procesar_chunk() con un array de longitud 1."""
+        salida = self.procesar_chunk(np.array([valor], dtype=np.float64))
         return float(salida[0])
 
+    def reset_state(self):
+        """Limpia la memoria del filtro (útil al iniciar una nueva calibración)"""
+        self.zi_notch = lfilter_zi(self.b_notch, self.a_notch)
+        self.zi_band = lfilter_zi(self.b_band, self.a_band)
+
     def reset(self):
-        """Reinicia el estado del filtro (usar al iniciar una nueva
-        sesión de calibración o captura, para no arrastrar transitorios
-        de la sesión anterior)."""
-        self.zi = np.zeros((self.sos.shape[0], 2))
+        """Alias de reset_state() — nombre que espera dsp.py
+        (CapturadorVentanas.reset() llama f.reset() por cada filtro)."""
+        self.reset_state()
 
 
-def crear_filtros_por_canal() -> dict:
-    """Crea un FiltroCanal independiente por cada canal definido en
-    config.NOMBRES_CANALES. Retorna un dict {nombre_canal: FiltroCanal}."""
-    return {nombre: FiltroCanal(nombre) for nombre in NOMBRES_CANALES}
+def crear_filtros_por_canal(fs: float = FS_TOTAL, lowcut: float = FILTRO_BANDPASS_LOW_HZ,
+                             highcut: float = FILTRO_BANDPASS_HIGH_HZ,
+                             notch_freq: float = FILTRO_NOTCH_FREQ_HZ,
+                             notch_q: float = FILTRO_NOTCH_Q,
+                             order: int = FILTRO_BUTTERWORTH_ORDER) -> dict:
+    """Crea un FiltroEMG independiente por cada canal (bíceps, tríceps,
+    antebrazo), con estado 'zi' propio — necesario porque cada canal
+    tiene su propia señal continua y no deben mezclar su historial de
+    filtrado entre sí.
 
-
-if __name__ == "__main__":
-    # Prueba de cordura: una sinusoide dentro de la banda pasante debe
-    # salir con amplitud similar (ganancia ≈ 1 en banda de paso); una
-    # sinusoide fuera de banda debe atenuarse fuertemente.
-    t = np.arange(0, 1.0, 1.0 / FS)
-
-    f_dentro = 60.0   # Hz, dentro de 20-150
-    f_fuera  = 5.0     # Hz, fuera de banda (por debajo de 20 Hz)
-
-    señal_dentro = 100.0 * np.sin(2 * np.pi * f_dentro * t)
-    señal_fuera  = 100.0 * np.sin(2 * np.pi * f_fuera * t)
-
-    filtro_a = FiltroCanal("test_dentro")
-    filtro_b = FiltroCanal("test_fuera")
-
-    salida_dentro = [filtro_a.procesar(x) for x in señal_dentro]
-    salida_fuera  = [filtro_b.procesar(x) for x in señal_fuera]
-
-    # Ignorar el transitorio inicial al medir amplitud
-    amp_dentro = np.std(salida_dentro[len(salida_dentro)//3:])
-    amp_fuera  = np.std(salida_fuera[len(salida_fuera)//3:])
-    amp_entrada = 100.0 / np.sqrt(2)  # RMS teórico de la entrada
-
-    print(f"FS efectivo por canal: {FS:.2f} Hz")
-    print(f"Nyquist efectivo: {FS/2:.2f} Hz, corte filtro: {FILTRO_CORTE_HZ} Hz")
-    print(f"Señal a {f_dentro} Hz (dentro de banda): RMS salida ≈ {amp_dentro:.1f} "
-          f"(entrada RMS ≈ {amp_entrada:.1f}) — debe pasar con poca atenuación")
-    print(f"Señal a {f_fuera} Hz (fuera de banda): RMS salida ≈ {amp_fuera:.1f} "
-          f"(entrada RMS ≈ {amp_entrada:.1f}) — debe atenuarse fuertemente")
+    NOTA sobre `fs`: dsp.py y config.py usan FS_TOTAL (1000 Hz, la tasa
+    total del ADC), no FS (≈333 Hz, la tasa efectiva por canal). Esto es
+    correcto aquí: cada canal recibe una muestra nueva cada vez que el
+    Timer1 del Arduino le toca su turno en el ciclo de 3 canales, pero
+    la propia señal EMG y el ruido de red (50Hz) existen en tiempo real
+    continuo, así que el filtro debe diseñarse con la frecuencia de
+    muestreo real a la que EFECTIVAMENTE llegan las muestras de ESE
+    canal. Si se observa que el notch o el pasabanda no filtran bien en
+    la práctica, revisar si conviene usar FS (≈333 Hz) en su lugar —
+    ver la nota de Nyquist efectivo en config.py (NYQUIST_EFECTIVO_HZ).
+    """
+    return {
+        nombre: FiltroEMG(fs=fs, lowcut=lowcut, highcut=highcut,
+                           notch_freq=notch_freq, notch_q=notch_q, order=order)
+        for nombre in NOMBRES_CANALES
+    }
