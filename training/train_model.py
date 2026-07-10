@@ -187,6 +187,7 @@ def entrenar_pipeline(csv_path: str, test_size: float = 0.2, seed: int = 42):
     regresor = RandomForestRegressor(
         n_estimators=200,
         max_depth=12,
+        min_samples_split=5,
         min_samples_leaf=2,
         random_state=seed,
         n_jobs=-1
