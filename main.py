@@ -31,10 +31,12 @@ from src.processing.standardization import (
     cargar_calibracion, normalizar_dataframe, reportar_saturaciones,
 )
 from training.train_model import entrenar_pipeline, DATA_PATH_NORMALIZADO
-from data.capture import esperar_ready, ejecutar_captura_interactiva
+from data.capture import (esperar_ready, ejecutar_captura_interactiva,
+                           generar_sesion_id, registrar_sesion, leer_angulos)
 from src.core.serial_bridge import SerialBridge
 from models.predictor import EMGPredictor
 
+import numpy as np
 import pandas as pd
 
 from rich.console import Console
@@ -47,6 +49,14 @@ from rich import box
 console = Console()
 
 RUTA_DATOS_NORMALIZADOS = DATA_PATH_NORMALIZADO  # misma ruta que usa train.py
+# Registro persistente de sesiones de CONTROL (modo "Usar"), paralelo a
+# data/sesiones.json (que registra sesiones de CAPTURA). Aquí es donde
+# queda todo lo necesario para llenar la Tabla 8.2 por sesión: latencia
+# electrónica/E2E real (loopback ACK) y, si corriste en modo evaluación,
+# MAE/R2 contra ángulos objetivo conocidos.
+RUTA_SESIONES_CONTROL = os.path.join(
+    os.path.dirname(__file__), "data", "sesiones_control.json"
+)
 
 LOG_UMBRAL_CAMBIO = 2.0
 
@@ -180,7 +190,8 @@ def _mostrar_tabla_metricas(test_metricas: dict):
 # =============================================================================
 # MODO 2 — USAR: inferencia en tiempo real, mover el brazo
 # =============================================================================
-def hilo_control(bridge: SerialBridge, predictor: EMGPredictor, estado: dict):
+def hilo_control(bridge: SerialBridge, predictor: EMGPredictor, estado: dict,
+                  registro_latencias: list):
     angulo_codo_ant   = -1.0
     angulo_muneca_ant = -1.0
 
@@ -196,7 +207,22 @@ def hilo_control(bridge: SerialBridge, predictor: EMGPredictor, estado: dict):
         angulo_codo   = resultado["angulo_codo"]
         angulo_muneca = resultado["angulo_muneca"]
 
-        bridge.enviar_angulos(angulo_codo, angulo_muneca)
+        # NUEVO: se usa la variante con medición real de latencia E2E
+        # (loopback ACK del firmware) en vez de enviar "a ciegas". Cada
+        # medición exitosa queda en registro_latencias, que la sesión
+        # persiste al terminar — esto es lo que llena la columna
+        # "Latencia E2E" de la Tabla 8.2 con datos reales, no estimados.
+        envio = bridge.enviar_angulos_con_medicion(angulo_codo, angulo_muneca)
+        if envio["exito"]:
+            registro_latencias.append({
+                "t_unix": time.time(),
+                "latencia_electronica_ms": envio["latencia_electronica_ms"],
+                "latencia_e2e_ms": envio["latencia_e2e_ms"],
+                "angulo_codo_pred": angulo_codo,
+                "angulo_muneca_pred": angulo_muneca,
+                "objetivo_codo": estado.get("objetivo_codo"),
+                "objetivo_muneca": estado.get("objetivo_muneca"),
+            })
 
         # Estado compartido con el hilo principal para el panel en vivo
         estado["bic"]    = features[_IDX_RMS_BICEPS]
@@ -234,6 +260,98 @@ def _panel_estado_en_vivo(estado: dict) -> Panel:
 
     return Panel(tabla, title="[bold green]Sistema activo — Ctrl+C para detener[/]",
                  border_style="green")
+
+
+def _ejecutar_modo_evaluacion(estado: dict, duracion_s: int = 5):
+    """Modo evaluación de trayectoria: pide ángulos objetivo conocidos
+    (igual que data/capture.py), los publica en `estado` para que
+    hilo_control los adjunte a cada medición de latencia, y sostiene la
+    postura `duracion_s` segundos por combinación. Al terminar cada
+    combinación, muestra el error medio observado en vivo.
+
+    Esto es lo que permite calcular MAE/R² por sesión en la Tabla 8.2,
+    no solo la latencia — sin esto, no hay forma de saber si el ángulo
+    predicho fue correcto porque nunca se compara contra nada."""
+    console.print(Panel.fit(
+        "Ingresa ángulos objetivo conocidos y sostenlos con el brazo real.\n"
+        "El sistema compara la predicción del modelo contra ese objetivo.",
+        title="[bold cyan]MODO EVALUACIÓN DE TRAYECTORIA[/]", border_style="cyan"
+    ))
+
+    while True:
+        objetivo_codo, objetivo_muneca = leer_angulos()
+        if objetivo_codo is None:
+            break
+
+        console.print(f"\n  Sostén: [bold cyan]Codo {objetivo_codo:.0f}° | "
+                       f"Muñeca {objetivo_muneca:.0f}°[/] durante {duracion_s}s...")
+        for s in range(3, 0, -1):
+            console.print(f"  [bold yellow]{s}...[/]", end="\r")
+            time.sleep(1.0)
+        console.print("  [bold green]¡EVALUANDO![/]                          ")
+
+        estado["objetivo_codo"] = objetivo_codo
+        estado["objetivo_muneca"] = objetivo_muneca
+        n_antes = len(estado.get("_latencias_ref", []))
+        time.sleep(duracion_s)
+
+        # Resumen rápido de esta combinación (solo lectura, no bloquea el hilo)
+        muestras_pos = [r for r in estado.get("_latencias_ref", [])[n_antes:]
+                         if r["objetivo_codo"] == objetivo_codo]
+        if muestras_pos:
+            mae_c = np.mean([abs(r["angulo_codo_pred"] - objetivo_codo) for r in muestras_pos])
+            mae_m = np.mean([abs(r["angulo_muneca_pred"] - objetivo_muneca) for r in muestras_pos])
+            console.print(f"  [dim]→ MAE observado en esta combinación: "
+                           f"Codo {mae_c:.1f}° | Muñeca {mae_m:.1f}° ({len(muestras_pos)} muestras)[/]")
+
+        estado["objetivo_codo"] = None
+        estado["objetivo_muneca"] = None
+
+        continuar = Prompt.ask("\n  ¿Evaluar otra combinación?", choices=["s", "q"], default="s")
+        if continuar == "q":
+            break
+
+
+def _calcular_resumen_sesion_control(registro_latencias: list) -> dict:
+    """Agrega los registros crudos de un hilo_control en las cifras que
+    pide la Tabla 8.2: latencia (electrónica y E2E) siempre, y MAE/R²
+    por DOF solo si hubo objetivos conocidos (modo evaluación)."""
+    resumen = {"n_mediciones_latencia": len(registro_latencias)}
+
+    lat_elec = [r["latencia_electronica_ms"] for r in registro_latencias]
+    lat_e2e  = [r["latencia_e2e_ms"] for r in registro_latencias]
+    if lat_elec:
+        resumen["latencia_electronica_ms"] = {
+            "promedio": float(np.mean(lat_elec)), "desv_est": float(np.std(lat_elec))
+        }
+        resumen["latencia_e2e_ms"] = {
+            "promedio": float(np.mean(lat_e2e)), "desv_est": float(np.std(lat_e2e))
+        }
+
+    con_objetivo = [r for r in registro_latencias if r.get("objetivo_codo") is not None]
+    resumen["modo"] = "evaluacion" if con_objetivo else "libre"
+    if con_objetivo:
+        obj_c = np.array([r["objetivo_codo"] for r in con_objetivo])
+        pred_c = np.array([r["angulo_codo_pred"] for r in con_objetivo])
+        obj_m = np.array([r["objetivo_muneca"] for r in con_objetivo])
+        pred_m = np.array([r["angulo_muneca_pred"] for r in con_objetivo])
+
+        def _mae_r2(y_true, y_pred):
+            mae = float(np.mean(np.abs(y_true - y_pred)))
+            ss_res = np.sum((y_true - y_pred) ** 2)
+            ss_tot = np.sum((y_true - np.mean(y_true)) ** 2)
+            r2 = float(1.0 - ss_res / ss_tot) if ss_tot > 0 else 1.0
+            return mae, r2
+
+        mae_codo, r2_codo = _mae_r2(obj_c, pred_c)
+        mae_muneca, r2_muneca = _mae_r2(obj_m, pred_m)
+        resumen["trayectoria"] = {
+            "n_muestras_con_objetivo": len(con_objetivo),
+            "mae_codo": mae_codo, "r2_codo": r2_codo,
+            "mae_muneca": mae_muneca, "r2_muneca": r2_muneca,
+        }
+
+    return resumen
 
 
 def flujo_usar():
@@ -282,8 +400,20 @@ def flujo_usar():
                        f"{RUTA_CALIBRACION_DEFAULT}.")
         bridge.cargar_calibracion(RUTA_CALIBRACION_DEFAULT)
 
-    estado = {}
+    modo_evaluacion = Confirm.ask(
+        "\n  ¿Ejecutar en modo evaluación de trayectoria (ángulos objetivo "
+        "conocidos, para la Tabla 8.2)? Si respondes 'No' corre en control "
+        "libre (solo se registra latencia, sin MAE/R²).", default=False
+    )
+
+    sesion_id = generar_sesion_id()
+    console.print(f"\n  [dim]Sesión de control:[/] [bold cyan]{sesion_id}[/]")
+
+    estado = {"objetivo_codo": None, "objetivo_muneca": None, "_latencias_ref": None}
+    registro_latencias: list = []
+    estado["_latencias_ref"] = registro_latencias  # misma lista, para que el resumen en vivo la lea
     flag_activo.set()
+    t_inicio_sesion = time.time()
 
     t_serial = threading.Thread(
         target=bridge.leer_muestras,
@@ -293,7 +423,7 @@ def flujo_usar():
     )
     t_ctrl = threading.Thread(
         target=hilo_control,
-        args=(bridge, predictor, estado),
+        args=(bridge, predictor, estado, registro_latencias),
         daemon=True,
         name="t_control"
     )
@@ -303,17 +433,43 @@ def flujo_usar():
 
     console.print()
     try:
-        with Live(_panel_estado_en_vivo(estado), console=console,
-                  refresh_per_second=8) as live:
-            while True:
-                live.update(_panel_estado_en_vivo(estado))
-                time.sleep(0.1)
+        if modo_evaluacion:
+            _ejecutar_modo_evaluacion(estado)
+        else:
+            with Live(_panel_estado_en_vivo(estado), console=console,
+                      refresh_per_second=8) as live:
+                while True:
+                    live.update(_panel_estado_en_vivo(estado))
+                    time.sleep(0.1)
     except KeyboardInterrupt:
         console.print("\n[yellow]Deteniendo...[/]")
 
     flag_activo.clear()
     time.sleep(0.5)
     bridge.desconectar()
+    duracion_total_s = time.time() - t_inicio_sesion
+
+    # --- Persistir la sesión de control completa (Tabla 8.2) -------------------
+    resumen = _calcular_resumen_sesion_control(registro_latencias)
+    resumen.update({
+        "sesion_id": sesion_id,
+        "fecha_inicio": time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime(t_inicio_sesion)),
+        "duracion_total_s": round(duracion_total_s, 1),
+        "puerto": puerto,
+    })
+    registrar_sesion(resumen, ruta=RUTA_SESIONES_CONTROL)
+    console.print(f"\n[bold green]✓[/] Sesión de control guardada en: "
+                  f"[dim]{os.path.abspath(RUTA_SESIONES_CONTROL)}[/]")
+
+    if "latencia_e2e_ms" in resumen:
+        console.print(f"  Latencia E2E: [bold]{resumen['latencia_e2e_ms']['promedio']:.1f} ms[/] "
+                       f"(±{resumen['latencia_e2e_ms']['desv_est']:.1f} ms), "
+                       f"n={resumen['n_mediciones_latencia']}")
+    if "trayectoria" in resumen:
+        t = resumen["trayectoria"]
+        console.print(f"  MAE Codo: [bold]{t['mae_codo']:.2f}°[/] (R²={t['r2_codo']:.3f})  "
+                       f"MAE Muñeca: [bold]{t['mae_muneca']:.2f}°[/] (R²={t['r2_muneca']:.3f})")
+
     console.print("[bold green]✓ Detenido.[/]")
 
 
