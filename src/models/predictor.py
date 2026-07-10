@@ -61,6 +61,7 @@ class EMGPredictor:
             return
         try:
             self.regresor = joblib.load(p)
+            self.regresor.n_jobs = 1 
             self.regresor_ok = True
             print(f"[Predictor] Regresor cargado: {p}")
         except Exception as e:
