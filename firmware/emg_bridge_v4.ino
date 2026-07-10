@@ -21,6 +21,7 @@
 //
 // Fs:         1000 Hz total, alternado entre 3 canales (~333 Hz/canal)
 // Protocolo TX (Arduino → PC):  S,<adc_biceps>,<adc_triceps>,<adc_antebrazo>\n
+//                               A (ACK byte) — después de procesar comando
 // Protocolo RX (PC → Arduino):  A,<angulo_codo>,<angulo_muneca>\n
 // Serial:     115200 baud
 // =============================================================================
@@ -90,6 +91,13 @@ float angulo_codo_actual    = 0.0f;
 float angulo_codo_meta      = 0.0f;
 float angulo_muneca_actual  = 0.0f;
 float angulo_muneca_meta    = 0.0f;
+
+// ---------------------------------------------------------------------------
+// FLAG DE COMANDO PROCESADO — para ACK loopback
+// ---------------------------------------------------------------------------
+// Cuando procesarLinea() recibe un comando válido "A,codo,muneca", activa
+// este flag. El loop() luego envía un byte ACK y lo desactiva.
+volatile bool comando_procesado = false;
 
 // ---------------------------------------------------------------------------
 // TIMER1 — dispara a FS_TOTAL_HZ, cada disparo lee un canal y alterna
@@ -169,6 +177,9 @@ void procesarLinea(char *linea) {
 
   angulo_codo_meta   = constrain(codo, 0.0f, 180.0f);
   angulo_muneca_meta = constrain(muneca, 0.0f, 180.0f);
+  
+  // ✓ NUEVO: Señala que el comando fue procesado para enviar ACK
+  comando_procesado = true;
 }
 
 void leerSerial() {
@@ -195,6 +206,15 @@ void transmitirTrama() {
   Serial.print(muestra_biceps);    Serial.print(F(","));
   Serial.print(muestra_triceps);   Serial.print(F(","));
   Serial.println(muestra_antebrazo);
+}
+
+// ---------------------------------------------------------------------------
+// TRANSMISIÓN DE ACK PARA LOOPBACK E2E
+// Protocolo: "A\n" — byte simple confirmando que se procesó el comando
+// Se envía inmediatamente después de aplicar actualizarAngulo()
+// ---------------------------------------------------------------------------
+void transmitirACK() {
+  Serial.println(F("A"));
 }
 
 // ---------------------------------------------------------------------------
@@ -225,8 +245,9 @@ void setup() {
   Serial.println(F("# EMG v4.0 — Puente de adquisición puro, 3 canales"));
   Serial.println(F("# Canales: A0=Biceps A1=Triceps A2=Antebrazo(pronator teres)"));
   Serial.println(F("# Fs=1000Hz total (~333Hz/canal) | Sin DSP ni calibracion embebida"));
-  Serial.println(F("# Protocolo TX: S,adc_biceps,adc_triceps,adc_antebrazo"));
-  Serial.println(F("# Protocolo RX: A,angulo_codo,angulo_muneca"));
+  Serial.println(F("# Protocolo TX (datos): S,adc_biceps,adc_triceps,adc_antebrazo"));
+  Serial.println(F("# Protocolo TX (ACK):   A (echo de comando procesado)"));
+  Serial.println(F("# Protocolo RX:        A,angulo_codo,angulo_muneca"));
   Serial.println(F("# Reposo = 0 grados en ambos DOF"));
   Serial.println(F("#"));
 }
@@ -254,5 +275,11 @@ void loop() {
       CANAL_SERVO_CODO, angulo_codo_actual, angulo_codo_meta);
     angulo_muneca_actual = actualizarAngulo(
       CANAL_SERVO_MUNECA, angulo_muneca_actual, angulo_muneca_meta);
+    
+    // ✓ NUEVO: Si procesamos un comando en este ciclo, enviar ACK
+    if (comando_procesado) {
+      transmitirACK();
+      comando_procesado = false;
+    }
   }
 }
