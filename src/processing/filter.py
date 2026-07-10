@@ -28,7 +28,7 @@ from scipy.signal import butter, lfilter, lfilter_zi, iirnotch
 
 from src.config import (
     NOMBRES_CANALES,
-    FS_TOTAL,
+    FS,
     FILTRO_NOTCH_FREQ_HZ,
     FILTRO_NOTCH_Q,
     FILTRO_BANDPASS_LOW_HZ,
@@ -97,7 +97,7 @@ class FiltroEMG:
         self.reset_state()
 
 
-def crear_filtros_por_canal(fs: float = FS_TOTAL, lowcut: float = FILTRO_BANDPASS_LOW_HZ,
+def crear_filtros_por_canal(fs: float = FS, lowcut: float = FILTRO_BANDPASS_LOW_HZ,
                              highcut: float = FILTRO_BANDPASS_HIGH_HZ,
                              notch_freq: float = FILTRO_NOTCH_FREQ_HZ,
                              notch_q: float = FILTRO_NOTCH_Q,
