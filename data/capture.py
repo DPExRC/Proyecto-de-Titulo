@@ -65,21 +65,22 @@ def generar_sesion_id() -> str:
     return f"{datetime.now().strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:4]}"
 
 
-def _cargar_sesiones() -> list:
-    if not os.path.exists(RUTA_SESIONES):
+def _cargar_sesiones(ruta: str = RUTA_SESIONES) -> list:
+    if not os.path.exists(ruta):
         return []
     try:
-        with open(RUTA_SESIONES, "r") as f:
+        with open(ruta, "r") as f:
             return json.load(f)
     except (json.JSONDecodeError, OSError):
         return []
 
 
 def registrar_sesion(registro: dict, ruta: str = RUTA_SESIONES) -> None:
-    """Persiste UNA sesión más en data/sesiones.json (lista acumulativa,
-    nunca se sobreescribe lo anterior). Esta es la fuente de verdad para
-    llenar la Tabla 6.6 (composición del dataset)."""
-    sesiones = _cargar_sesiones()
+    """Persiste UNA sesión más en `ruta` (lista acumulativa vía append,
+    nunca se sobreescribe lo anterior). Fuente de verdad para llenar la
+    Tabla 6.6 (composición del dataset de captura) o, si se usa con
+    RUTA_SESIONES_CONTROL desde main.py, la Tabla 8.2 (sesiones de control)."""
+    sesiones = _cargar_sesiones(ruta)
     sesiones.append(registro)
     os.makedirs(os.path.dirname(os.path.abspath(ruta)), exist_ok=True)
     with open(ruta, "w") as f:
