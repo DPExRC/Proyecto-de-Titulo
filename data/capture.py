@@ -25,8 +25,11 @@ import time
 import csv
 import os
 import re
+import json
 import argparse
 import sys
+import uuid
+from datetime import datetime, timezone
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from src.config import (BAUDRATE, DATA_PATH, DURACION_CAPTURA_S,
@@ -46,8 +49,41 @@ from rich import box
 console = Console()
 
 PROTOCOLO_PREFIJO = "S,"   
-COLUMNAS_CSV = NOMBRES_FEATURES + COLS_TARGET
+# NUEVO: cada fila queda etiquetada con la sesión de captura que la generó
+# (sesion_id + timestamp), para poder reconstruir la Tabla 6.6 (número de
+# sesiones, repeticiones, duración total) sin depender de la memoria de
+# quién capturó qué. Antes el CSV solo tenía features + ángulos.
+COLUMNAS_CSV = ["sesion_id", "timestamp"] + NOMBRES_FEATURES + COLS_TARGET
 PATRON_NUMERO = re.compile(r"^-?\d+(\.\d+)?$")
+
+RUTA_SESIONES = os.path.join(os.path.dirname(__file__), "sesiones.json")
+
+
+def generar_sesion_id() -> str:
+    """ID de sesión legible y único: fecha + sufijo corto aleatorio.
+    Ej: 20260710_143210_a1b2"""
+    return f"{datetime.now().strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:4]}"
+
+
+def _cargar_sesiones() -> list:
+    if not os.path.exists(RUTA_SESIONES):
+        return []
+    try:
+        with open(RUTA_SESIONES, "r") as f:
+            return json.load(f)
+    except (json.JSONDecodeError, OSError):
+        return []
+
+
+def registrar_sesion(registro: dict, ruta: str = RUTA_SESIONES) -> None:
+    """Persiste UNA sesión más en data/sesiones.json (lista acumulativa,
+    nunca se sobreescribe lo anterior). Esta es la fuente de verdad para
+    llenar la Tabla 6.6 (composición del dataset)."""
+    sesiones = _cargar_sesiones()
+    sesiones.append(registro)
+    os.makedirs(os.path.dirname(os.path.abspath(ruta)), exist_ok=True)
+    with open(ruta, "w") as f:
+        json.dump(sesiones, f, indent=2, ensure_ascii=False)
 
 
 # ------------------------------------------------------------------------------
@@ -82,7 +118,8 @@ def _parsear_numero(texto: str):
 
 
 def capturar_angulos(ser: serial.Serial, angulo_codo: float, angulo_muneca: float,
-                      duracion_s: float, capturador: CapturadorVentanas) -> list:
+                      duracion_s: float, capturador: CapturadorVentanas,
+                      sesion_id: str) -> list:
     """Lee tramas crudas durante duracion_s segundos, filtra y ventanea
     en tiempo real usando una barra de progreso Rich."""
     registros = []
@@ -111,7 +148,8 @@ def capturar_angulos(ser: serial.Serial, angulo_codo: float, angulo_muneca: floa
             if valores is not None:
                 vector_features = capturador.procesar_trama(valores)
                 if vector_features is not None:
-                    registros.append(vector_features + [angulo_codo, angulo_muneca])
+                    ts_iso = datetime.now(timezone.utc).isoformat(timespec="milliseconds")
+                    registros.append([sesion_id, ts_iso] + vector_features + [angulo_codo, angulo_muneca])
                     
                     # Forzamos que avance la barra visual de forma proporcional
                     progreso_actual = int((time.time() - t0) * 50)
@@ -160,15 +198,22 @@ def resumen_csv(path: str):
     if not os.path.exists(path):
         return
     combinaciones = {}
+    sesiones_vistas = set()
     with open(path, "r") as f:
         reader = csv.DictReader(f)
         for fila in reader:
             try:
                 key = (float(fila[COL_ANGULO_CODO]), float(fila[COL_ANGULO_MUNECA]))
                 combinaciones[key] = combinaciones.get(key, 0) + 1
+                if "sesion_id" in fila:
+                    sesiones_vistas.add(fila["sesion_id"])
             except (ValueError, KeyError):
                 pass
-                
+
+    if sesiones_vistas:
+        console.print(f"  [dim]Sesiones distintas acumuladas en el CSV: "
+                      f"[bold cyan]{len(sesiones_vistas)}[/][/]")
+
     if combinaciones:
         tabla = Table(title="\nDistribución de Posiciones en el Dataset", box=box.ROUNDED, border_style="dim")
         tabla.add_column("Codo Target", justify="right", style="cyan")
@@ -183,12 +228,19 @@ def resumen_csv(path: str):
 
 # ------------------------------------------------------------------------------
 def ejecutar_captura_interactiva(ser: serial.Serial, duracion_s: int = DURACION_CAPTURA_S,
-                                  ruta_salida: str = DATA_PATH) -> int:
+                                  ruta_salida: str = DATA_PATH,
+                                  ruta_sesiones: str = RUTA_SESIONES) -> int:
     os.makedirs(os.path.dirname(os.path.abspath(ruta_salida)), exist_ok=True)
     archivo_nuevo = not os.path.exists(ruta_salida)
 
     capturador = CapturadorVentanas()
     total = 0
+
+    sesion_id = generar_sesion_id()
+    t_inicio_sesion = datetime.now(timezone.utc)
+    repeticiones_por_posicion = {}   # {"codo,muneca": n_vectores}
+
+    console.print(f"  [dim]Sesión de captura:[/] [bold cyan]{sesion_id}[/]")
 
     with open(ruta_salida, "a", newline="") as f:
         writer = csv.writer(f)
@@ -214,13 +266,17 @@ def ejecutar_captura_interactiva(ser: serial.Serial, duracion_s: int = DURACION_
 
             capturador.reset()  
             registros = capturar_angulos(ser, angulo_codo, angulo_muneca,
-                                          duracion_s, capturador)
+                                          duracion_s, capturador, sesion_id)
 
             for reg in registros:
-                writer.writerow([f"{v:.6f}" for v in reg])
+                # sesion_id (str) y timestamp (str) van tal cual; el resto son floats
+                writer.writerow(reg[:2] + [f"{v:.6f}" for v in reg[2:]])
             f.flush()
 
             total += len(registros)
+            clave_pos = f"{angulo_codo:.1f},{angulo_muneca:.1f}"
+            repeticiones_por_posicion[clave_pos] = repeticiones_por_posicion.get(clave_pos, 0) + 1
+
             console.print(f"  [bold green]✓[/] {len(registros)} vectores guardados. [dim](Total acumulado en sesión: {total})[/]")
 
             continuar = Prompt.ask(
@@ -231,7 +287,25 @@ def ejecutar_captura_interactiva(ser: serial.Serial, duracion_s: int = DURACION_
             if continuar == "q":
                 break
 
+    t_fin_sesion = datetime.now(timezone.utc)
+    duracion_real_s = (t_fin_sesion - t_inicio_sesion).total_seconds()
+
+    # --- Persistir el registro de esta sesión (Tabla 6.6) -------------------
+    registrar_sesion({
+        "sesion_id": sesion_id,
+        "fecha_inicio": t_inicio_sesion.isoformat(timespec="seconds"),
+        "fecha_fin": t_fin_sesion.isoformat(timespec="seconds"),
+        "duracion_total_s": round(duracion_real_s, 1),
+        "duracion_por_captura_s": duracion_s,
+        "num_posiciones_angulares": len(repeticiones_por_posicion),
+        "repeticiones_por_posicion": repeticiones_por_posicion,
+        "total_repeticiones": sum(repeticiones_por_posicion.values()),
+        "total_vectores": total,
+        "dataset_csv": os.path.abspath(ruta_salida),
+    }, ruta=ruta_sesiones)
+
     console.print(f"\n  Dataset: [dim]{os.path.abspath(ruta_salida)}[/]")
+    console.print(f"  Registro de sesión guardado en: [dim]{os.path.abspath(ruta_sesiones)}[/]")
     console.print(f"  Vectores añadidos en esta sesión: [bold green]{total}[/]")
     resumen_csv(ruta_salida)
     return total
