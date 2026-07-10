@@ -203,6 +203,9 @@ void transmitirTrama() {
 void setup() {
   Serial.begin(115200);
   Wire.begin();
+
+  Wire.setClock(400000); 
+  
   pca.begin();
   pca.setOscillatorFrequency(25000000);
   pca.setPWMFreq(FRECUENCIA_PWM);
