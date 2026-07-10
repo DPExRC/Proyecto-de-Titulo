@@ -61,6 +61,7 @@ import joblib
 from sklearn.model_selection import train_test_split, KFold, cross_validate
 from sklearn.ensemble import RandomForestRegressor
 from sklearn.pipeline import Pipeline
+from sklearn.metrics import mean_squared_error
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from src.config import (NOMBRES_FEATURES, COLS_TARGET, COL_ANGULO_CODO,
@@ -82,6 +83,12 @@ PATH_MODELO = os.path.join(
 )
 PATH_META = os.path.join(
     os.path.dirname(__file__), "..", "models", "meta_entrenamiento.json"
+)
+# Historial acumulativo: cada entrenamiento se AGREGA (no sobreescribe), para
+# poder auditar la evolución del modelo entre corridas — meta_entrenamiento.json
+# solo guarda el último resultado; este archivo guarda todos.
+PATH_HISTORIAL = os.path.join(
+    os.path.dirname(__file__), "..", "models", "historial_entrenamientos.jsonl"
 )
 
 
@@ -200,23 +207,61 @@ def entrenar_pipeline(csv_path: str, test_size: float = 0.2, seed: int = 42):
 
     console.print("\n[cyan]⚙ Ejecutando Validación Cruzada (5-Fold CV)...[/]")
     cv = KFold(n_splits=5, shuffle=True, random_state=seed)
-    
-    # Estructura de scoring multi-salida nativa de sklearn
-    cv_resultados = cross_validate(
-        pipeline, X_train, y_train, cv=cv,
-        scoring="neg_mean_absolute_error",
-        return_train_score=False, n_jobs=-1
-    )
 
-    # Para extraer métricas por separado en multi-salida, ajustamos estimadores locales
+    # Resultados CRUDOS por fold — esto es lo que llena la Tabla 6.7 completa
+    # (antes solo se guardaba el promedio; cada fold se pierde al cerrar la
+    # terminal). Se guarda MAE por DOF + R2 promedio de ambos DOF, por fold.
+    fold_resultados = []   # lista de dicts, uno por fold
     mae_cv_por_col = {col: [] for col in COLS_TARGET}
-    for train_idx, val_idx in cv.split(X_train):
+    for i_fold, (train_idx, val_idx) in enumerate(cv.split(X_train), start=1):
         p_temporal = Pipeline([("reg", RandomForestRegressor(n_estimators=30, max_depth=12, random_state=seed, n_jobs=-1))])
         p_temporal.fit(X_train[train_idx], y_train[train_idx])
         preds_val = p_temporal.predict(X_train[val_idx])
+
+        mae_fold = {}
+        r2_fold = {}
         for idx_col, col in enumerate(COLS_TARGET):
-            mae_f = np.mean(np.abs(y_train[val_idx, idx_col] - preds_val[:, idx_col]))
+            y_v = y_train[val_idx, idx_col]
+            y_p = preds_val[:, idx_col]
+            mae_f = float(np.mean(np.abs(y_v - y_p)))
             mae_cv_por_col[col].append(mae_f)
+            mae_fold[col] = mae_f
+
+            ss_res = np.sum((y_v - y_p) ** 2)
+            ss_tot = np.sum((y_v - np.mean(y_v)) ** 2)
+            r2_fold[col] = float(1.0 - ss_res / ss_tot) if ss_tot > 0 else 1.0
+
+        r2_promedio_fold = float(np.mean(list(r2_fold.values())))
+        fold_resultados.append({
+            "fold": i_fold,
+            "mae_codo": mae_fold.get(COL_ANGULO_CODO),
+            "mae_muneca": mae_fold.get(COL_ANGULO_MUNECA),
+            "r2_codo": r2_fold.get(COL_ANGULO_CODO),
+            "r2_muneca": r2_fold.get(COL_ANGULO_MUNECA),
+            "r2_promedio": r2_promedio_fold,
+        })
+
+    # --- TABLA 6.7 en consola: detalle por fold + media ± desv. est. -----------
+    tabla_cv = Table(title="\nValidación Cruzada 5-Fold — Detalle por Partición (Tabla 6.7)",
+                      box=box.ROUNDED, border_style="dim")
+    tabla_cv.add_column("Fold", justify="center", style="bold cyan")
+    tabla_cv.add_column("MAE Codo (°)", justify="right")
+    tabla_cv.add_column("MAE Muñeca (°)", justify="right")
+    tabla_cv.add_column("R² promedio", justify="right")
+    for fr in fold_resultados:
+        tabla_cv.add_row(str(fr["fold"]), f"{fr['mae_codo']:.2f}", f"{fr['mae_muneca']:.2f}", f"{fr['r2_promedio']:.4f}")
+
+    _mae_codo_arr = np.array([fr["mae_codo"] for fr in fold_resultados])
+    _mae_muneca_arr = np.array([fr["mae_muneca"] for fr in fold_resultados])
+    _r2_prom_arr = np.array([fr["r2_promedio"] for fr in fold_resultados])
+    tabla_cv.add_row(
+        "Media±DE",
+        f"{_mae_codo_arr.mean():.2f}±{_mae_codo_arr.std():.2f}",
+        f"{_mae_muneca_arr.mean():.2f}±{_mae_muneca_arr.std():.2f}",
+        f"{_r2_prom_arr.mean():.4f}±{_r2_prom_arr.std():.4f}",
+        style="bold"
+    )
+    console.print(tabla_cv)
 
     # 2. Ajuste Final sobre el conjunto de entrenamiento completo
     console.print("[cyan]⚙ Ajustando modelo definitivo sobre el set de entrenamiento...[/]")
@@ -227,11 +272,12 @@ def entrenar_pipeline(csv_path: str, test_size: float = 0.2, seed: int = 42):
     # 3. Inferencia sobre el conjunto Hold-out de evaluación
     y_pred = pipeline.predict(X_test)
 
-    # --- TABLA DE RENDIMIENTO GLOBAL ---
-    tabla_perf = Table(title=f"\nMétricas del Regresor Multi-Salida (Hold-Out {test_size*100:.0f}%)", box=box.ROUNDED)
+    # --- TABLA 6.8: MAE, RMSE y R² sobre el conjunto de prueba -----------------
+    tabla_perf = Table(title=f"\nMétricas del Regresor Multi-Salida (Hold-Out {test_size*100:.0f}%) — Tabla 6.8", box=box.ROUNDED)
     tabla_perf.add_column("Grado de Libertad (DOF)", style="bold cyan")
     tabla_perf.add_column("CV MAE (Train)", justify="right", style="green")
-    tabla_perf.add_column("Test MAE (Hold-Out)", justify="right", style="bold magenta")
+    tabla_perf.add_column("Test MAE", justify="right", style="bold magenta")
+    tabla_perf.add_column("Test RMSE", justify="right", style="bold magenta")
     tabla_perf.add_column("Coeficiente R²", justify="right")
 
     meta_modelo = {"cv_5fold": {}, "test": {}}
@@ -239,22 +285,90 @@ def entrenar_pipeline(csv_path: str, test_size: float = 0.2, seed: int = 42):
     for i, col in enumerate(COLS_TARGET):
         mae_cv = np.mean(mae_cv_por_col[col])
         mae_test = np.mean(np.abs(y_test[:, i] - y_pred[:, i]))
-        
+        rmse_test = float(np.sqrt(mean_squared_error(y_test[:, i], y_pred[:, i])))
+
         # Coeficiente de determinación R² manual por columna
         ss_res = np.sum((y_test[:, i] - y_pred[:, i]) ** 2)
         ss_tot = np.sum((y_test[:, i] - np.mean(y_test[:, i])) ** 2)
         r2_col = 1.0 - (ss_res / ss_tot) if ss_tot > 0 else 1.0
 
-        tabla_perf.add_row(col, f"{mae_cv:.2f}°", f"{mae_test:.2f}°", f"{r2_col:.4f}")
+        tabla_perf.add_row(col, f"{mae_cv:.2f}°", f"{mae_test:.2f}°", f"{rmse_test:.2f}°", f"{r2_col:.4f}")
 
         # Guardar en diccionario de metadatos
         meta_modelo["cv_5fold"][col] = {"mae_promedio": float(mae_cv)}
         meta_modelo["test"][col] = {
             "test_mae": float(mae_test),
+            "test_rmse": rmse_test,
             "test_r2": float(r2_col)
         }
     
     console.print(tabla_perf)
+
+    # --- TABLA 6.9: Comparación Entrenamiento vs. Prueba (sobreajuste) --------
+    y_train_pred = pipeline.predict(X_train)
+    tabla_overfit = Table(title="\nAnálisis de Sobreajuste — Entrenamiento vs. Prueba (Tabla 6.9)",
+                           box=box.ROUNDED, border_style="dim")
+    tabla_overfit.add_column("Conjunto", style="bold cyan")
+    tabla_overfit.add_column("MAE Codo (°)", justify="right")
+    tabla_overfit.add_column("MAE Muñeca (°)", justify="right")
+    tabla_overfit.add_column("R²", justify="right")
+
+    meta_modelo["train"] = {}
+    meta_modelo["brecha"] = {}
+    mae_train_por_col, r2_train_por_col = {}, {}
+    for i, col in enumerate(COLS_TARGET):
+        mae_tr = float(np.mean(np.abs(y_train[:, i] - y_train_pred[:, i])))
+        ss_res = np.sum((y_train[:, i] - y_train_pred[:, i]) ** 2)
+        ss_tot = np.sum((y_train[:, i] - np.mean(y_train[:, i])) ** 2)
+        r2_tr = float(1.0 - ss_res / ss_tot) if ss_tot > 0 else 1.0
+        mae_train_por_col[col] = mae_tr
+        r2_train_por_col[col] = r2_tr
+        meta_modelo["train"][col] = {"train_mae": mae_tr, "train_r2": r2_tr}
+        meta_modelo["brecha"][col] = {
+            "mae": meta_modelo["test"][col]["test_mae"] - mae_tr,
+            "r2": meta_modelo["test"][col]["test_r2"] - r2_tr,
+        }
+
+    tabla_overfit.add_row("Entrenamiento",
+                           f"{mae_train_por_col[COL_ANGULO_CODO]:.2f}",
+                           f"{mae_train_por_col[COL_ANGULO_MUNECA]:.2f}",
+                           f"{np.mean(list(r2_train_por_col.values())):.4f}")
+    tabla_overfit.add_row("Prueba",
+                           f"{meta_modelo['test'][COL_ANGULO_CODO]['test_mae']:.2f}",
+                           f"{meta_modelo['test'][COL_ANGULO_MUNECA]['test_mae']:.2f}",
+                           f"{np.mean([meta_modelo['test'][c]['test_r2'] for c in COLS_TARGET]):.4f}")
+    tabla_overfit.add_row("Diferencia (brecha)",
+                           f"{meta_modelo['brecha'][COL_ANGULO_CODO]['mae']:+.2f}",
+                           f"{meta_modelo['brecha'][COL_ANGULO_MUNECA]['mae']:+.2f}",
+                           f"{np.mean([meta_modelo['brecha'][c]['r2'] for c in COLS_TARGET]):+.4f}",
+                           style="bold yellow")
+    console.print(tabla_overfit)
+
+    # --- Tiempo de inferencia PC real, medido muestra a muestra ----------------
+    # No es una cifra sintética: se mide el predict() del pipeline YA
+    # entrenado, fila por fila del propio set de prueba, con
+    # time.perf_counter(). Esto es lo que llena la columna "Inferencia PC"
+    # de la Tabla 8.2 con datos reales del hardware donde se entrena.
+    tiempos_inferencia_ms = []
+    for fila in X_test:
+        t0 = time.perf_counter()
+        pipeline.predict(fila.reshape(1, -1))
+        tiempos_inferencia_ms.append((time.perf_counter() - t0) * 1000.0)
+    tiempos_inferencia_ms = np.array(tiempos_inferencia_ms)
+
+    meta_modelo["inferencia_pc"] = {
+        "promedio_ms": float(tiempos_inferencia_ms.mean()),
+        "desv_est_ms": float(tiempos_inferencia_ms.std()),
+        "maximo_ms": float(tiempos_inferencia_ms.max()),
+        "n_muestras": int(len(tiempos_inferencia_ms)),
+    }
+    console.print(
+        f"\n[bold cyan]⏱ Inferencia PC (por muestra, n={len(tiempos_inferencia_ms)}):[/] "
+        f"{tiempos_inferencia_ms.mean():.2f} ms (±{tiempos_inferencia_ms.std():.2f} ms), "
+        f"máx {tiempos_inferencia_ms.max():.2f} ms"
+    )
+
+    meta_modelo["cv_5fold_por_fold"] = fold_resultados
 
     # --- REPORTE DE RESOLUCIÓN POR RANGOS CINEMÁTICOS ---
     console.print("\n[bold cyan]🔍 Análisis de Precisión Local por Segmentos:[/]")
@@ -306,7 +420,15 @@ def entrenar_pipeline(csv_path: str, test_size: float = 0.2, seed: int = 42):
     
     with open(PATH_META, "w") as f:
         json.dump(meta, f, indent=2)
-    console.print(f"[bold green]✓[/] Metadatos de auditoría guardados en: [dim]{os.path.abspath(PATH_META)}[/]\n")
+    console.print(f"[bold green]✓[/] Metadatos de auditoría guardados en: [dim]{os.path.abspath(PATH_META)}[/]")
+
+    # Historial ACUMULATIVO (append, nunca sobreescribe) — a diferencia de
+    # meta_entrenamiento.json que solo guarda la última corrida, esto permite
+    # auditar cómo evolucionaron las métricas entre entrenamientos sucesivos.
+    os.makedirs(os.path.dirname(os.path.abspath(PATH_HISTORIAL)), exist_ok=True)
+    with open(PATH_HISTORIAL, "a") as f:
+        f.write(json.dumps(meta, ensure_ascii=False) + "\n")
+    console.print(f"[bold green]✓[/] Corrida añadida al historial: [dim]{os.path.abspath(PATH_HISTORIAL)}[/]\n")
 
     # Alertas finales de tolerancia si algún DOF supera desviaciones aceptables
     for col in COLS_TARGET:
