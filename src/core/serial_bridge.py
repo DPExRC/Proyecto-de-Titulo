@@ -7,11 +7,15 @@
 #
 # Protocolo (debe coincidir EXACTO con emg_bridge_v4.ino):
 #   RX (Arduino -> PC):  "S,<adc_biceps>,<adc_triceps>,<adc_antebrazo>\n"
+#                        "A\n" (ACK echo para loopback E2E)
 #   TX (PC -> Arduino):  "A,<angulo_codo>,<angulo_muneca>\n"
 #
 # CAMBIO respecto a la versión anterior: enviar_angulos() ahora antepone
 # el prefijo "A," — sin él, el firmware descarta la trama silenciosamente
 # (ver procesarLinea() en el .ino: exige linea[0]=='A' y linea[1]==',').
+# 
+# NUEVO: enviar_angulos_con_medicion() espera el ACK del firmware para
+# medir latencia electrónica E2E real (τ_elec = t_echo - t_trigger).
 # =============================================================================
 
 import os
@@ -30,6 +34,10 @@ from src.processing.calibration import CalibradorEMG, RUTA_CALIBRACION_DEFAULT
 
 PROTOCOLO_PREFIJO_RX = "S,"   # Arduino -> PC (muestras crudas)
 PROTOCOLO_PREFIJO_TX = "A,"   # PC -> Arduino (ángulos objetivo)
+PROTOCOLO_ACK = "A"            # Arduino -> PC (echo de comando procesado)
+
+# Latencia mecánica nominal de los servos KS-3518 (para recorrido típico de 60°)
+LATENCIA_MECANICA_MS = 120.0
 
 LOG_DIR = os.path.join(os.path.dirname(__file__), "..", "..", "logs")
 os.makedirs(LOG_DIR, exist_ok=True)
@@ -202,6 +210,112 @@ class SerialBridge:
                 self.conectado = False
                 self.logger.error("Error enviando comandos al actuador")
                 return False
+
+    # ------------------------------------------------------------------
+    def enviar_angulos_con_medicion(self, angulo_codo, angulo_muneca, 
+                                     timeout_ack=0.5) -> dict:
+        """
+        Envía ángulos y espera el ACK del firmware para medir latencia E2E real.
+        
+        Retorna un diccionario con:
+        - "exito": bool — si se envió y recibió ACK correctamente
+        - "latencia_electronica_ms": float — tiempo t_echo - t_trigger
+        - "latencia_e2e_ms": float — latencia electrónica + mecánica nominal
+        - "angulo_codo": float — valor enviado
+        - "angulo_muneca": float — valor enviado
+        
+        Protocolo:
+        1. Registra t_trigger con time.perf_counter() de alta resolución
+        2. Envía trama "A,codo,muneca\n"
+        3. Espera ACK "A\n" desde el firmware (bloqueante con timeout)
+        4. Registra t_echo al recibir ACK
+        5. Calcula latencia = t_echo - t_trigger
+        """
+        if not self.conectado or self.ser is None:
+            return {
+                "exito": False,
+                "latencia_electronica_ms": None,
+                "latencia_e2e_ms": None,
+                "angulo_codo": angulo_codo,
+                "angulo_muneca": angulo_muneca,
+            }
+
+        trama_salida = f"{PROTOCOLO_PREFIJO_TX}{angulo_codo},{angulo_muneca}\n"
+        t_trigger = time.perf_counter()
+
+        with self.lock:
+            try:
+                # 1. Enviar comando
+                self.ser.write(trama_salida.encode('ascii'))
+                self.ser.flush()
+
+                # 2. Esperar ACK con timeout
+                # (En el Arduino, el ACK se envía en el próximo ciclo de control,
+                # típicamente dentro de ~20 ms)
+                timeout_antiguo = self.ser.timeout
+                self.ser.timeout = timeout_ack
+
+                try:
+                    ack_linea = self.ser.readline()
+                    t_echo = time.perf_counter()
+                    ack_decodificado = ack_linea.decode('ascii', errors='ignore').strip()
+                    
+                    if ack_decodificado == PROTOCOLO_ACK:
+                        latencia_elec_ms = (t_echo - t_trigger) * 1000.0
+                        latencia_e2e_ms = latencia_elec_ms + LATENCIA_MECANICA_MS
+                        
+                        self.logger.info(
+                            "Latencia E2E medida: τ_elec=%.2f ms, τ_mech=%.1f ms → "
+                            "E2E=%.1f ms",
+                            latencia_elec_ms, LATENCIA_MECANICA_MS, latencia_e2e_ms
+                        )
+                        
+                        return {
+                            "exito": True,
+                            "latencia_electronica_ms": latencia_elec_ms,
+                            "latencia_e2e_ms": latencia_e2e_ms,
+                            "angulo_codo": angulo_codo,
+                            "angulo_muneca": angulo_muneca,
+                        }
+                    else:
+                        self.logger.warning(
+                            "ACK recibido pero contenido inesperado: %s",
+                            repr(ack_decodificado)
+                        )
+                        return {
+                            "exito": False,
+                            "latencia_electronica_ms": None,
+                            "latencia_e2e_ms": None,
+                            "angulo_codo": angulo_codo,
+                            "angulo_muneca": angulo_muneca,
+                        }
+
+                except serial.SerialTimeoutException:
+                    self.logger.warning(
+                        "Timeout esperando ACK del firmware (timeout=%.2f s)",
+                        timeout_ack
+                    )
+                    return {
+                        "exito": False,
+                        "latencia_electronica_ms": None,
+                        "latencia_e2e_ms": None,
+                        "angulo_codo": angulo_codo,
+                        "angulo_muneca": angulo_muneca,
+                    }
+
+                finally:
+                    self.ser.timeout = timeout_antiguo
+
+            except serial.SerialException as e:
+                self.conectado = False
+                self.logger.error("Error enviando comandos con medición: %s", e)
+                return {
+                    "exito": False,
+                    "latencia_electronica_ms": None,
+                    "latencia_e2e_ms": None,
+                    "angulo_codo": angulo_codo,
+                    "angulo_muneca": angulo_muneca,
+                }
 
     # ------------------------------------------------------------------
     def ejecutar_calibracion(self, duracion_reposo_s: float = 3.0,
