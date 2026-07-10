@@ -133,7 +133,8 @@ class SerialBridge:
             return None
 
         try:
-            linea = self.ser.readline()
+            with self.lock:
+                linea = self.ser.readline()
 
             if not linea:  # timeout sin datos
                 return None
@@ -212,24 +213,30 @@ class SerialBridge:
                 return False
 
     # ------------------------------------------------------------------
-    def enviar_angulos_con_medicion(self, angulo_codo, angulo_muneca, 
+ # ------------------------------------------------------------------
+    def enviar_angulos_con_medicion(self, angulo_codo, angulo_muneca,
                                      timeout_ack=0.5) -> dict:
         """
         Envía ángulos y espera el ACK del firmware para medir latencia E2E real.
-        
+
         Retorna un diccionario con:
         - "exito": bool — si se envió y recibió ACK correctamente
         - "latencia_electronica_ms": float — tiempo t_echo - t_trigger
         - "latencia_e2e_ms": float — latencia electrónica + mecánica nominal
         - "angulo_codo": float — valor enviado
         - "angulo_muneca": float — valor enviado
-        
+
         Protocolo:
-        1. Registra t_trigger con time.perf_counter() de alta resolución
-        2. Envía trama "A,codo,muneca\n"
-        3. Espera ACK "A\n" desde el firmware (bloqueante con timeout)
-        4. Registra t_echo al recibir ACK
-        5. Calcula latencia = t_echo - t_trigger
+        1. Limpia el buffer de entrada (descarta backlog de tramas "S,..."
+           acumuladas antes de este comando).
+        2. Registra t_trigger con time.perf_counter() de alta resolución.
+        3. Envía trama "A,codo,muneca\n".
+        4. Espera el ACK "A\n" desde el firmware, descartando cualquier
+           trama "S,..." intercalada que llegue mientras tanto (el
+           firmware v4.1 transmite datos de forma asíncrona e
+           independiente del ciclo de ACK — ver emg_bridge_v4.ino).
+        5. Registra t_echo al recibir el "A" real.
+        6. Calcula latencia = t_echo - t_trigger.
         """
         if not self.conectado or self.ser is None:
             return {
@@ -241,35 +248,52 @@ class SerialBridge:
             }
 
         trama_salida = f"{PROTOCOLO_PREFIJO_TX}{angulo_codo},{angulo_muneca}\n"
-        t_trigger = time.perf_counter()
 
         with self.lock:
             try:
+                # 0. Descartar backlog de tramas "S,..." previas a este comando
+                self.ser.reset_input_buffer()
+                t_trigger = time.perf_counter()
+
                 # 1. Enviar comando
                 self.ser.write(trama_salida.encode('ascii'))
                 self.ser.flush()
 
-                # 2. Esperar ACK con timeout
+                # 2. Esperar ACK con timeout, filtrando tramas "S,..." intercaladas
                 # (En el Arduino, el ACK se envía en el próximo ciclo de control,
                 # típicamente dentro de ~20 ms)
                 timeout_antiguo = self.ser.timeout
                 self.ser.timeout = timeout_ack
 
+                deadline = time.perf_counter() + timeout_ack
+                ack_decodificado = None
+                t_echo = None
+
                 try:
-                    ack_linea = self.ser.readline()
-                    t_echo = time.perf_counter()
-                    ack_decodificado = ack_linea.decode('ascii', errors='ignore').strip()
-                    
+                    while time.perf_counter() < deadline:
+                        linea = self.ser.readline()
+                        if not linea:
+                            break  # timeout de readline sin datos
+
+                        texto = linea.decode('ascii', errors='ignore').strip()
+
+                        if texto == PROTOCOLO_ACK:
+                            t_echo = time.perf_counter()
+                            ack_decodificado = texto
+                            break
+                        # trama "S,..." intercalada -> se descarta, se sigue
+                        # esperando el "A" real dentro del mismo timeout_ack
+
                     if ack_decodificado == PROTOCOLO_ACK:
                         latencia_elec_ms = (t_echo - t_trigger) * 1000.0
                         latencia_e2e_ms = latencia_elec_ms + LATENCIA_MECANICA_MS
-                        
+
                         self.logger.info(
                             "Latencia E2E medida: τ_elec=%.2f ms, τ_mech=%.1f ms → "
                             "E2E=%.1f ms",
                             latencia_elec_ms, LATENCIA_MECANICA_MS, latencia_e2e_ms
                         )
-                        
+
                         return {
                             "exito": True,
                             "latencia_electronica_ms": latencia_elec_ms,
@@ -279,8 +303,9 @@ class SerialBridge:
                         }
                     else:
                         self.logger.warning(
-                            "ACK recibido pero contenido inesperado: %s",
-                            repr(ack_decodificado)
+                            "Timeout esperando ACK real (timeout=%.2f s); "
+                            "solo se recibieron tramas de datos intercaladas",
+                            timeout_ack
                         )
                         return {
                             "exito": False,

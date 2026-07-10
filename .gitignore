@@ -2,13 +2,6 @@
 # Artefactos de Machine Learning (Modelos pesados y metadatos de compilación)
 # =============================================================================
 models/*.pkl
-models/*.json
-
-# =============================================================================
-# Datasets (Datos masivos crudos y normalizados en CSV)
-# =============================================================================
-data/*.csv
-
 
 # =============================================================================
 # Entornos Virtuales y Configuración Local

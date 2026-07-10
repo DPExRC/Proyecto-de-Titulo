@@ -197,7 +197,7 @@ def entrenar_pipeline(csv_path: str, test_size: float = 0.2, seed: int = 42):
         min_samples_split=5,
         min_samples_leaf=2,
         random_state=seed,
-        n_jobs=-1
+        n_jobs= 1
     )
 
     # Encapsulamos el pipeline listo para producción

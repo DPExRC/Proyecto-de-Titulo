@@ -1,43 +1,16 @@
 // =============================================================================
-// EMG v4.0 — PUENTE DE ADQUISICIÓN PURO (DAQ) — 3 CANALES, 2 SERVOS
-// =============================================================================
-// Hardware:   Arduino Uno (ATmega328P, 16 MHz)
-//             Módulo EMG genérico x3: bíceps → A0, tríceps → A1,
-//                                      pronator teres (antebrazo) → A2
-//             PCA9685 (I2C, 25 MHz): SDA=A4, SCL=A5
-//             Servo codo   → canal 0 del PCA9685
-//             Servo muñeca → canal 1 del PCA9685
-//
-// Arquitectura: el Arduino NO ejecuta DSP ni calibración. Su única
-// responsabilidad es:
-//   1. Muestrear los 3 canales ADC de forma sincronizada.
-//   2. Transmitir las muestras crudas por serial.
-//   3. Recibir 2 ángulos objetivo desde la PC y moverlos con un
-//      limitador de tasa (slew-rate) como única protección mecánica
-//      local.
-// Todo el filtrado, ventaneo, extracción de características y la
-// inferencia del regresor ocurren en Python (ver src/processing/ y
-// src/inference/ en el repositorio).
-//
-// Fs:         1000 Hz total, alternado entre 3 canales (~333 Hz/canal)
-// Protocolo TX (Arduino → PC):  S,<adc_biceps>,<adc_triceps>,<adc_antebrazo>\n
-//                               A (ACK byte) — después de procesar comando
-// Protocolo RX (PC → Arduino):  A,<angulo_codo>,<angulo_muneca>\n
-// Serial:     115200 baud
+// EMG v4.1 — PUENTE DE ADQUISICIÓN PURO (DAQ) — TOTALMENTE ASÍNCRONO
 // =============================================================================
 
 #include <avr/interrupt.h>
 #include <Wire.h>
 #include <Adafruit_PWMServoDriver.h>
-#include <io90pwm1.h>
 #include <HardwareSerial.h>
-#include <USBAPI.h>
 
 // ---------------------------------------------------------------------------
 // PCA9685
-// --------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
 Adafruit_PWMServoDriver pca = Adafruit_PWMServoDriver(0x40);
-
 #define CANAL_SERVO_CODO    0
 #define CANAL_SERVO_MUNECA  1
 
@@ -54,63 +27,52 @@ Adafruit_PWMServoDriver pca = Adafruit_PWMServoDriver(0x40);
 // ---------------------------------------------------------------------------
 #define PIN_BICEPS     A0
 #define PIN_TRICEPS    A1
-#define PIN_ANTEBRAZO  A2   // pronator teres
+#define PIN_ANTEBRAZO  A2   
 
 #define N_CANALES 3
 
 // ---------------------------------------------------------------------------
 // PARÁMETROS DE MUESTREO
 // ---------------------------------------------------------------------------
-#define FS_TOTAL_HZ      1000   // Hz, tasa total del ADC (los 3 canales
-                                 // se leen en sucesión dentro de cada ciclo)
-#define PASO_MS          20     // cadencia de recepción de comandos de ángulo
+#define FS_TOTAL_HZ      1000   
+#define PASO_MS          20     
 
 // ---------------------------------------------------------------------------
-// LIMITADOR DE TASA (slew-rate) — única protección mecánica local
+// LIMITADOR DE TASA (slew-rate)
 // ---------------------------------------------------------------------------
-// KS-3518: 300°/s sin carga — margen 80%
 #define VEL_MAX_SERVO    300.0f
 #define DT_CONTROL       (PASO_MS / 1000.0f)
 #define MAX_CAMBIO       (VEL_MAX_SERVO * DT_CONTROL * 0.8f)  // 4.8°/ciclo
 
 // ---------------------------------------------------------------------------
-// ESTADO DE MUESTREO — ISR alterna entre los 3 canales
+// ESTADO DE MUESTREO — Volatile para comunicación con ISR
 // ---------------------------------------------------------------------------
 volatile int16_t muestra_biceps    = 0;
 volatile int16_t muestra_triceps   = 0;
 volatile int16_t muestra_antebrazo = 0;
-volatile bool    trama_lista       = false;  // true cuando los 3 canales
-                                              // de un mismo ciclo están listos
-volatile uint8_t canal_actual      = 0;      // 0=biceps,1=triceps,2=antebrazo
+volatile bool    trama_lista       = false;
+volatile uint8_t canal_actual      = 0;
 
 // ---------------------------------------------------------------------------
-// ESTADO DE CONTROL — ángulos objetivo y actuales, 2 DOF
+// ESTADO DE CONTROL — ángulos objetivo y actuales
 // ---------------------------------------------------------------------------
-// Reposo = 0° en ambos DOF (convención fijada para todo el proyecto).
 float angulo_codo_actual    = 0.0f;
 float angulo_codo_meta      = 0.0f;
 float angulo_muneca_actual  = 0.0f;
 float angulo_muneca_meta    = 0.0f;
 
-// ---------------------------------------------------------------------------
-// FLAG DE COMANDO PROCESADO — para ACK loopback
-// ---------------------------------------------------------------------------
-// Cuando procesarLinea() recibe un comando válido "A,codo,muneca", activa
-// este flag. El loop() luego envía un byte ACK y lo desactiva.
 volatile bool comando_procesado = false;
 
 // ---------------------------------------------------------------------------
-// TIMER1 — dispara a FS_TOTAL_HZ, cada disparo lee un canal y alterna
-// Con 3 canales, cada canal individual se actualiza a FS_TOTAL_HZ/3 ≈ 333 Hz,
-// consistente con el Nyquist efectivo usado en el pipeline Python.
+// TIMER1 — Dispara a 1000 Hz total
 // ---------------------------------------------------------------------------
 void configurarTimer1() {
   cli();
   TCCR1A = 0; TCCR1B = 0; TCNT1 = 0;
-  OCR1A  = 1999;                 // 1 ms → 1000 Hz total
-  TCCR1B |= (1 << WGM12);
-  TCCR1B |= (1 << CS11);         // prescaler 8
-  TIMSK1 |= (1 << OCIE1A);
+  OCR1A  = 1999;             // 16MHz / (8 * 1000Hz) - 1 = 1999
+  TCCR1B |= (1 << WGM12);    // Modo CTC
+  TCCR1B |= (1 << CS11);     // Prescaler 8
+  TIMSK1 |= (1 << OCIE1A);   // Habilitar interrupción
   sei();
 }
 
@@ -127,7 +89,7 @@ ISR(TIMER1_COMPA_vect) {
     default:
       muestra_antebrazo = analogRead(PIN_ANTEBRAZO);
       canal_actual = 0;
-      trama_lista = true;   // ciclo de 3 canales completo
+      trama_lista = true; // Fin de ciclo de escaneo de los 3 canales
       break;
   }
 }
@@ -143,8 +105,6 @@ void moverServo(uint8_t canal, float angulo) {
   pca.setPWM(canal, 0, cuentas);
 }
 
-// Aplica el limitador de tasa a un ángulo actual hacia su meta, y mueve
-// el servo correspondiente. Se llama una vez por DOF por ciclo de control.
 float actualizarAngulo(uint8_t canal_pca, float actual, float meta) {
   float dif = meta - actual;
   if (abs(dif) > MAX_CAMBIO)
@@ -157,19 +117,16 @@ float actualizarAngulo(uint8_t canal_pca, float actual, float meta) {
 }
 
 // ---------------------------------------------------------------------------
-// PARSER DE COMANDOS SERIALES DESDE PC
-// Protocolo: "A,<angulo_codo>,<angulo_muneca>\n"
+// PARSER DE COMANDOS SERIALES (No bloqueante)
 // ---------------------------------------------------------------------------
 char rx_buf[24];
 uint8_t rx_idx = 0;
 
 void procesarLinea(char *linea) {
   if (linea[0] != 'A' || linea[1] != ',') return;
-
-  // linea = "A,<codo>,<muneca>" — separar por la coma tras "A,"
   char *resto = linea + 2;
   char *coma = strchr(resto, ',');
-  if (coma == NULL) return;   // trama incompleta, se descarta
+  if (coma == NULL) return;   
 
   *coma = '\0';
   float codo   = atof(resto);
@@ -178,7 +135,6 @@ void procesarLinea(char *linea) {
   angulo_codo_meta   = constrain(codo, 0.0f, 180.0f);
   angulo_muneca_meta = constrain(muneca, 0.0f, 180.0f);
   
-  // ✓ NUEVO: Señala que el comando fue procesado para enviar ACK
   comando_procesado = true;
 }
 
@@ -192,27 +148,29 @@ void leerSerial() {
     } else if (rx_idx < sizeof(rx_buf) - 1) {
       rx_buf[rx_idx++] = c;
     }
-    // Si se excede el buffer sin '\n', la trama se descarta implícitamente
-    // al sobreescribirse rx_idx en el próximo '\n' válido.
   }
 }
 
 // ---------------------------------------------------------------------------
-// TRANSMISIÓN DE MUESTRAS CRUDAS
-// Protocolo: "S,<adc_biceps>,<adc_triceps>,<adc_antebrazo>\n"
+// TRANSMISIÓN PROTEGIDA (Copia atómica de 16-bits)
 // ---------------------------------------------------------------------------
 void transmitirTrama() {
+  int16_t local_biceps, local_triceps, local_antebrazo;
+
+  // Bloqueo de interrupción ultracorto para clonar las variables de forma segura
+  uint8_t sreg_backup = SREG;
+  cli();
+  local_biceps    = muestra_biceps;
+  local_triceps   = muestra_triceps;
+  local_antebrazo = muestra_antebrazo;
+  SREG = sreg_backup; 
+
   Serial.print(F("S,"));
-  Serial.print(muestra_biceps);    Serial.print(F(","));
-  Serial.print(muestra_triceps);   Serial.print(F(","));
-  Serial.println(muestra_antebrazo);
+  Serial.print(local_biceps);    Serial.print(F(","));
+  Serial.print(local_triceps);   Serial.print(F(","));
+  Serial.println(local_antebrazo);
 }
 
-// ---------------------------------------------------------------------------
-// TRANSMISIÓN DE ACK PARA LOOPBACK E2E
-// Protocolo: "A\n" — byte simple confirmando que se procesó el comando
-// Se envía inmediatamente después de aplicar actualizarAngulo()
-// ---------------------------------------------------------------------------
 void transmitirACK() {
   Serial.println(F("A"));
 }
@@ -223,15 +181,13 @@ void transmitirACK() {
 void setup() {
   Serial.begin(115200);
   Wire.begin();
-
-  Wire.setClock(400000); 
+  Wire.setClock(400000); // I2C a 400kHz rápido
   
   pca.begin();
   pca.setOscillatorFrequency(25000000);
   pca.setPWMFreq(FRECUENCIA_PWM);
   delay(10);
 
-  // Posición segura inicial: reposo = 0° en ambos DOF
   moverServo(CANAL_SERVO_CODO, 0.0f);
   moverServo(CANAL_SERVO_MUNECA, 0.0f);
 
@@ -242,41 +198,32 @@ void setup() {
   configurarTimer1();
 
   Serial.println(F("READY"));
-  Serial.println(F("# EMG v4.0 — Puente de adquisición puro, 3 canales"));
-  Serial.println(F("# Canales: A0=Biceps A1=Triceps A2=Antebrazo(pronator teres)"));
-  Serial.println(F("# Fs=1000Hz total (~333Hz/canal) | Sin DSP ni calibracion embebida"));
-  Serial.println(F("# Protocolo TX (datos): S,adc_biceps,adc_triceps,adc_antebrazo"));
-  Serial.println(F("# Protocolo TX (ACK):   A (echo de comando procesado)"));
-  Serial.println(F("# Protocolo RX:        A,angulo_codo,angulo_muneca"));
-  Serial.println(F("# Reposo = 0 grados en ambos DOF"));
-  Serial.println(F("#"));
 }
 
 // ---------------------------------------------------------------------------
-// LOOP PRINCIPAL
+// LOOP PRINCIPAL (Estructura de ejecución libre)
 // ---------------------------------------------------------------------------
 void loop() {
+  // 1. Leer el puerto constantemente sin importar si hay trama lista o no
   leerSerial();
 
-  if (!trama_lista) return;
-  trama_lista = false;
+  // 2. Transmitir datos de forma asíncrona solo cuando la ISR cambie el flag
+  if (trama_lista) {
+    trama_lista = false;
+    transmitirTrama(); 
+  }
 
-  // 1. Transmitir muestras crudas del ciclo actual
-  transmitirTrama();
-
-  // 2. Actualizar ambos servos con limitador de tasa, hacia el último
-  //    ángulo objetivo recibido de la PC (angulo_*_meta se actualiza de
-  //    forma asíncrona en procesarLinea() cada vez que llega un comando)
+  // 3. Ventana temporal exacta para el control de los servos y envío de ACK
   static uint32_t ultimo_control = 0;
   uint32_t ahora = millis();
   if (ahora - ultimo_control >= PASO_MS) {
-    ultimo_control = ahora;
+    ultimo_control += PASO_MS; // Evita deriva temporal acumulada
+
     angulo_codo_actual = actualizarAngulo(
       CANAL_SERVO_CODO, angulo_codo_actual, angulo_codo_meta);
     angulo_muneca_actual = actualizarAngulo(
       CANAL_SERVO_MUNECA, angulo_muneca_actual, angulo_muneca_meta);
-    
-    // ✓ NUEVO: Si procesamos un comando en este ciclo, enviar ACK
+
     if (comando_procesado) {
       transmitirACK();
       comando_procesado = false;
