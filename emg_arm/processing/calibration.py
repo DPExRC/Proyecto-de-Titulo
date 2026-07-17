@@ -51,9 +51,15 @@ import json
 import time
 import numpy as np
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
-from emg_arm.config import NOMBRES_FEATURES, NOMBRES_CANALES, N_FEATURES_POR_CANAL
-from emg_arm.processing.dsp import CapturadorVentanas
+try:
+    from emg_arm.config import NOMBRES_FEATURES, NOMBRES_CANALES, N_FEATURES_POR_CANAL
+    from emg_arm.processing.dsp import CapturadorVentanas
+    from emg_arm.communication.serial_bridge import validar_rangos_adc
+except ImportError:
+    sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
+    from emg_arm.config import NOMBRES_FEATURES, NOMBRES_CANALES, N_FEATURES_POR_CANAL
+    from emg_arm.processing.dsp import CapturadorVentanas
+    from emg_arm.communication.serial_bridge import validar_rangos_adc
 
 # Importaciones de la estética unificada Rich
 from rich.console import Console

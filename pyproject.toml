@@ -1,0 +1,33 @@
+[build-system]
+requires = ["setuptools>=64.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "emg-arm"
+version = "3.0.0"
+description = "Sistema EMG para control de brazo robótico — 3 canales sEMG, 2 DOF"
+authors = [{name = "DPExRC"}]
+requires-python = ">=3.9"
+dependencies = [
+    "numpy>=2.0,<3.0",
+    "scipy>=1.10,<2.0",
+    "scikit-learn>=1.3,<2.0",
+    "pandas>=2.0,<4.0",
+    "matplotlib>=3.7,<4.0",
+    "pyserial>=3.5,<4.0",
+    "joblib>=1.3,<2.0",
+    "rich>=13.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0",
+    "mypy>=1.0",
+    "ruff>=0.1",
+]
+
+[tool.setuptools.packages.find]
+include = ["emg_arm*"]
+
+[tool.setuptools.package-data]
+"emg_arm" = ["py.typed"]

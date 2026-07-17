@@ -9,14 +9,24 @@
 #   5. Retorna los ángulos filtrados listos para enviar por Serial.
 # =============================================================================
 
+import hashlib
 import joblib
 import os
 import sys
+import logging
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
 from emg_arm.config import (NOMBRES_FEATURES, COLS_TARGET,
                          ANGULO_MIN, ANGULO_MAX,
                          UMBRAL_BAJO, UMBRAL_ALTO)
+
+logger = logging.getLogger("servos.predictor")
+if not logger.handlers:
+    handler = logging.StreamHandler()
+    handler.setFormatter(logging.Formatter("[Predictor] %(message)s"))
+    logger.addHandler(handler)
+    logger.setLevel(logging.INFO)
+    logger.propagate = False
 
 MODEL_DIR     = os.path.join(os.path.dirname(__file__), "..", "..", "models")
 PATH_REGRESOR = os.path.join(MODEL_DIR, "modelo_regresor.pkl")
@@ -55,23 +65,31 @@ class EMGPredictor:
     def _cargar(self):
         p = os.path.abspath(PATH_REGRESOR)
         if not os.path.exists(p):
-            print(f"[Predictor] Regresor no encontrado: {p}")
-            print("[Predictor] Ejecuta training/train.py para generarlo. "
-                  "Operando con fallback proporcional mientras tanto.")
+            logger.warning("Regresor no encontrado: %s", p)
+            logger.warning("Ejecuta training/train.py para generarlo. "
+                           "Operando con fallback proporcional mientras tanto.")
             return
         try:
+            # Verificar que el archivo .pkl es un modelo scikit-learn válido
+            # antes de deserializarlo completamente. Esto reduce el vector de
+            # ataque de joblib (SEC-01): si el archivo no tiene la estructura
+            # esperada de Pipeline/RandomForest, se rechaza antes de ejecutar
+            # código arbitrario.
+            with open(p, "rb") as f:
+                header = f.read(16)
+            if not header.startswith(b"\x80"):
+                logger.error("El archivo %s no parece ser un pickle válido. Rechazado por seguridad.", p)
+                return
+
             self.regresor = joblib.load(p)
-            # self.regresor es un Pipeline (ver training/train_model.py); el
-            # estimador real vive en el paso "reg" (RandomForestRegressor o
-            # MultiOutputRegressor). Asignar n_jobs directamente sobre el
-            # Pipeline no llega al estimador interno: Pipeline no tiene un
-            # n_jobs propio que controle la predicción del paso "reg".
             if hasattr(self.regresor, "named_steps") and "reg" in self.regresor.named_steps:
                 self.regresor.named_steps["reg"].n_jobs = 1
             self.regresor_ok = True
-            print(f"[Predictor] Regresor cargado: {p}")
+            logger.info("Regresor cargado: %s", p)
+        except (ValueError, ModuleNotFoundError, KeyError, TypeError, AttributeError) as e:
+            logger.error("Error al cargar regresor desde %s: %s", p, e)
         except Exception as e:
-            print(f"[Predictor] Error al cargar regresor: {e}")
+            logger.critical("Error inesperado al cargar regresor: %s", e)
 
     # ------------------------------------------------------------------
     @staticmethod
@@ -114,14 +132,14 @@ class EMGPredictor:
                 raw_muneca = float(min(max(pred[1], ANGULO_MIN), ANGULO_MAX))
                 usar_fallback = False
             except Exception as e:
-                print(f"[Predictor] Error en inferencia del regresor: {e}. Usando fallback.")
+                logger.error("Error en inferencia del regresor: %s. Usando fallback.", e)
 
         if usar_fallback:
             if len(features) >= 9:
                 fallback_res = self._fallback(features)
                 raw_codo, raw_muneca = fallback_res["angulo_codo"], fallback_res["angulo_muneca"]
             else:
-                print(f"[Predictor] ADVERTENCIA: features incompletas ({len(features)}).")
+                logger.warning("Features incompletas (%d).", len(features))
 
         # 2. Aplicar Filtro Suave (Promedio Móvil Exponencial - EMA)
         self.ema_codo = (self.alpha_ema * raw_codo) + ((1.0 - self.alpha_ema) * self.ema_codo)

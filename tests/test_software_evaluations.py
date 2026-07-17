@@ -3,7 +3,7 @@ import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from src.verification import (
+from verification import (
     verificar_parseo_serial,
     verificar_filtro_discrimina_bandas,
     verificar_features_validas,

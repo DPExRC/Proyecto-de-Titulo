@@ -31,8 +31,9 @@ def wl(ventana: np.ndarray) -> float:
 
 
 def ZCR(ventana: np.ndarray, umbral: float = 0.0) -> int:
-    """Cruces por cero (Zero Crossings), con umbral mínimo de variación
-    para descartar cruces producidos por ruido de baja amplitud."""
+    """Zero-crossing count with hysteresis threshold.
+    Returns the number of zero crossings that exceed the amplitude threshold.
+    Rejects spurious crossings caused by low-amplitude noise."""
     signos = np.sign(ventana)
     # Reemplaza ceros exactos por el signo de la muestra previa para no
     # contar falsos cruces en tramos planos (equivalente vectorizado del

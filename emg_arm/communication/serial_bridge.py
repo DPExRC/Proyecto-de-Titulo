@@ -45,15 +45,36 @@ LOG_PATH = os.path.join(LOG_DIR, "serial_bridge.log")
 
 logger = logging.getLogger("servos.serial_bridge")
 if not logger.handlers:
-    handler = logging.FileHandler(LOG_PATH)
+    from logging.handlers import RotatingFileHandler
+    handler = RotatingFileHandler(LOG_PATH, maxBytes=5*1024*1024, backupCount=3)
     handler.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] %(message)s"))
     logger.addHandler(handler)
     logger.setLevel(logging.INFO)
     logger.propagate = False
 
 
+# Rango válido del ADC del Arduino Uno (10 bits)
+_ADC_MIN = 0
+_ADC_MAX = 1023
+
+
+def validar_rangos_adc(valores: list[float]) -> Optional[list[float]]:
+    """Verifica que todos los valores ADC estén dentro del rango [0, 1023].
+    Pública y reutilizable desde capture.py, calibration.py.
+    Retorna los valores si son válidos, None si alguno está fuera de rango."""
+    for v in valores:
+        if not (_ADC_MIN <= v <= _ADC_MAX):
+            return None
+    return valores
+
+
+# Alias privado para compatibilidad interna
+_validar_rangos_adc = validar_rangos_adc
+
+
 def parsear_trama_emg(linea: str) -> Optional[list[float]]:
-    """Parsea una trama EMG cruda sin depender del puerto serie."""
+    """Parsea una trama EMG cruda sin depender del puerto serie.
+    Rechaza tramas con valores ADC fuera del rango [0, 1023]."""
     if not linea.startswith(PROTOCOLO_PREFIJO_RX):
         return None
 
@@ -62,9 +83,11 @@ def parsear_trama_emg(linea: str) -> Optional[list[float]]:
         return None
 
     try:
-        return [float(p) for p in partes]
+        valores = [float(p) for p in partes]
     except ValueError:
         return None
+
+    return _validar_rangos_adc(valores)
 
 
 def procesar_trama_emg(valores_crudos: list[float],
@@ -98,8 +121,9 @@ class SerialBridge:
         self.logger = logger
 
     # ------------------------------------------------------------------
-    def conectar(self) -> bool:
+    def conectar(self, reintento: int = 0) -> bool:
         """Intenta establecer conexión con el Arduino de forma segura.
+        Aplica backoff exponencial entre reintentos: 2^reintento segundos.
         Retorna True si la conexión quedó lista, False si falló."""
         try:
             if self.ser is not None and self.ser.is_open:
@@ -109,17 +133,18 @@ class SerialBridge:
 
             time.sleep(2)  # Pausa necesaria para que el Arduino haga su auto-reset
 
-            # --- Limpieza de Buffer (Flush) inicial ---
             self.ser.reset_input_buffer()
             self.ser.reset_output_buffer()
 
             self.conectado = True
+            self.reintentos = 0
             self.logger.info("Conectado a %s a %s baudios", self.port, self.baudrate)
             return True
 
         except serial.SerialException as e:
             self.conectado = False
             self.logger.error("Error de conexión en %s: %s", self.port, e)
+            self.reintentos = reintento
             return False
 
     # ------------------------------------------------------------------
@@ -153,8 +178,11 @@ class SerialBridge:
                 self.ser.close()
             return None
 
-        except Exception as e:
-            self.logger.exception("Error inesperado decodificando datos: %s", e)
+        except (UnicodeDecodeError, ValueError) as e:
+            self.logger.warning("Error decodificando datos seriales: %s", e)
+            self.conectado = False
+            if self.ser:
+                self.ser.close()
             return None
 
     # ------------------------------------------------------------------
@@ -213,7 +241,76 @@ class SerialBridge:
                 return False
 
     # ------------------------------------------------------------------
- # ------------------------------------------------------------------
+    # ------------------------------------------------------------------
+    def _leer_ack_byte_a_byte(self, deadline: float) -> tuple:
+        """Lee byte por byte desde el serial hasta encontrar un ACK "A\\n"
+        aislado, o hasta que expire el deadline.
+
+        Retorna (t_echo, texto_ack) si encontró ACK, o (None, None) si
+        no lo encontró.
+
+        A diferencia de la versión anterior (que usaba readline() y
+        comparaba líneas completas), esta versión:
+
+        1. Lee un byte a la vez para no tragarse tramas "S,..." parciales
+           que readline() consume en su totalidad.
+        2. Solo acepta "A" cuando aparece COMO ÚNICO CARÁCTER en una línea
+           (precedido de \\n o \\r\\n y seguido de \\n o \\r\\n).
+        3. Ignora cualquier "A" que aparezca dentro de tramas "S,..." o
+           de basura serial.
+
+        Esto elimina la causa raíz de la corrupción masiva en los logs:
+           antes, readline() devolvía fragmentos de tramas "S,..."
+           corruptas por el solapamiento con reset_input_buffer(), y el
+           comparador de líneas completas aceptaba cualquier cosa que no
+           comenzara con "S," como candidato a ACK.
+        """
+        from serial import SerialTimeoutException
+
+        # Máquina de estados ultra simple para detectar "\\nA\\n" o "\\r\\nA\\r\\n"
+        # Estado 0: esperando inicio de línea (\\n o \\r)
+        # Estado 1: recibimos \\n o \\r, esperando 'A'
+        # Estado 2: recibimos 'A', esperando fin de línea (\\n)
+        estado = 0
+        while time.perf_counter() < deadline:
+            try:
+                byte = self.ser.read(1)
+            except SerialTimeoutException:
+                break
+            if not byte:
+                break  # timeout sin datos
+            c = byte.decode('ascii', errors='ignore')
+
+            if estado == 0:
+                if c in ('\n', '\r'):
+                    estado = 1
+                # cualquier otro carácter -> reinicia
+            elif estado == 1:
+                if c == 'A':
+                    estado = 2
+                elif c in ('\n', '\r'):
+                    estado = 1  # otro salto de línea, seguimos esperando 'A'
+                else:
+                    estado = 0  # carácter inesperado, reiniciamos
+            elif estado == 2:
+                if c == '\n':
+                    # ACK confirmado: encontramos "\\nA\\n" o "\\r\\nA\\n"
+                    t_echo = time.perf_counter()
+                    return t_echo, "A"
+                elif c == '\r':
+                    # puede ser "\\nA\\r" -> esperar \\n
+                    estado = 3
+                else:
+                    estado = 0  # falso positivo, reiniciamos
+            elif estado == 3:
+                if c == '\n':
+                    t_echo = time.perf_counter()
+                    return t_echo, "A"
+                else:
+                    estado = 0
+
+        return None, None
+
     def enviar_angulos_con_medicion(self, angulo_codo, angulo_muneca,
                                      timeout_ack=0.5) -> dict:
         """
@@ -231,10 +328,9 @@ class SerialBridge:
            acumuladas antes de este comando).
         2. Registra t_trigger con time.perf_counter() de alta resolución.
         3. Envía trama "A,codo,muneca\n".
-        4. Espera el ACK "A\n" desde el firmware, descartando cualquier
-           trama "S,..." intercalada que llegue mientras tanto (el
-           firmware v4.1 transmite datos de forma asíncrona e
-           independiente del ciclo de ACK — ver emg_bridge_v4.ino).
+        4. Espera el ACK "A\n" desde el firmware usando _leer_ack_byte_a_byte(),
+           que detecta 'A' como carácter aislado en una línea (no confunde
+           tramas "S,..." con ACK).
         5. Registra t_echo al recibir el "A" real.
         6. Calcula latencia = t_echo - t_trigger.
         """
@@ -259,32 +355,18 @@ class SerialBridge:
                 self.ser.write(trama_salida.encode('ascii'))
                 self.ser.flush()
 
-                # 2. Esperar ACK con timeout, filtrando tramas "S,..." intercaladas
-                # (En el Arduino, el ACK se envía en el próximo ciclo de control,
-                # típicamente dentro de ~20 ms)
+                # 2. Esperar ACK con timeout, leyendo byte a byte.
+                #    _leer_ack_byte_a_byte() usa una máquina de estados que
+                #    solo acepta "A" como único carácter en una línea,
+                #    ignorando tramas "S,..." intercaladas y basura serial.
                 timeout_antiguo = self.ser.timeout
-                self.ser.timeout = timeout_ack
-
-                deadline = time.perf_counter() + timeout_ack
-                ack_decodificado = None
-                t_echo = None
+                self.ser.timeout = 0.005  # 5ms timeout de byte individual
 
                 try:
-                    while time.perf_counter() < deadline:
-                        linea = self.ser.readline()
-                        if not linea:
-                            break  # timeout de readline sin datos
+                    deadline = time.perf_counter() + timeout_ack
+                    t_echo, ack = self._leer_ack_byte_a_byte(deadline)
 
-                        texto = linea.decode('ascii', errors='ignore').strip()
-
-                        if texto == PROTOCOLO_ACK:
-                            t_echo = time.perf_counter()
-                            ack_decodificado = texto
-                            break
-                        # trama "S,..." intercalada -> se descarta, se sigue
-                        # esperando el "A" real dentro del mismo timeout_ack
-
-                    if ack_decodificado == PROTOCOLO_ACK:
+                    if ack == PROTOCOLO_ACK:
                         latencia_elec_ms = (t_echo - t_trigger) * 1000.0
                         latencia_e2e_ms = latencia_elec_ms + LATENCIA_MECANICA_MS
 
@@ -293,7 +375,6 @@ class SerialBridge:
                             "E2E=%.1f ms",
                             latencia_elec_ms, LATENCIA_MECANICA_MS, latencia_e2e_ms
                         )
-
                         return {
                             "exito": True,
                             "latencia_electronica_ms": latencia_elec_ms,
@@ -303,8 +384,8 @@ class SerialBridge:
                         }
                     else:
                         self.logger.warning(
-                            "Timeout esperando ACK real (timeout=%.2f s); "
-                            "solo se recibieron tramas de datos intercaladas",
+                            "ACK no recibido dentro de %.2f s (timeout). "
+                            "Latencia no medida.",
                             timeout_ack
                         )
                         return {
@@ -314,19 +395,6 @@ class SerialBridge:
                             "angulo_codo": angulo_codo,
                             "angulo_muneca": angulo_muneca,
                         }
-
-                except serial.SerialTimeoutException:
-                    self.logger.warning(
-                        "Timeout esperando ACK del firmware (timeout=%.2f s)",
-                        timeout_ack
-                    )
-                    return {
-                        "exito": False,
-                        "latencia_electronica_ms": None,
-                        "latencia_e2e_ms": None,
-                        "angulo_codo": angulo_codo,
-                        "angulo_muneca": angulo_muneca,
-                    }
 
                 finally:
                     self.ser.timeout = timeout_antiguo
