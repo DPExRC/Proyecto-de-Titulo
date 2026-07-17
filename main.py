@@ -60,6 +60,13 @@ RUTA_SESIONES_CONTROL = os.path.join(
 
 LOG_UMBRAL_CAMBIO = 2.0
 
+# enviar_angulos_con_medicion() mantiene bridge.lock tomado durante toda la
+# espera del ACK (media medida 16.71 ms, 44% de los ciclos supera los 20 ms
+# de INTERVALO_CONTROL, ver logs/serial_bridge.log) y llama
+# reset_input_buffer(), que compite por el puerto con t_serial. Se muestrea
+# a esta frecuencia en vez de en cada ciclo de 50 Hz.
+INTERVALO_MEDICION_LATENCIA_S = 1.0
+
 _IDX_RMS_BICEPS    = NOMBRES_FEATURES.index("rms_biceps")
 _IDX_RMS_TRICEPS   = NOMBRES_FEATURES.index("rms_triceps")
 _IDX_RMS_ANTEBRAZO = NOMBRES_FEATURES.index("rms_antebrazo")
@@ -194,6 +201,7 @@ def hilo_control(bridge: SerialBridge, predictor: EMGPredictor, estado: dict,
                   registro_latencias: list):
     angulo_codo_ant   = -1.0
     angulo_muneca_ant = -1.0
+    t_ultima_medicion = 0.0
 
     while flag_activo.is_set():
         try:
@@ -207,22 +215,28 @@ def hilo_control(bridge: SerialBridge, predictor: EMGPredictor, estado: dict,
         angulo_codo   = resultado["angulo_codo"]
         angulo_muneca = resultado["angulo_muneca"]
 
-        # NUEVO: se usa la variante con medición real de latencia E2E
-        # (loopback ACK del firmware) en vez de enviar "a ciegas". Cada
-        # medición exitosa queda en registro_latencias, que la sesión
-        # persiste al terminar — esto es lo que llena la columna
-        # "Latencia E2E" de la Tabla 8.2 con datos reales, no estimados.
-        envio = bridge.enviar_angulos_con_medicion(angulo_codo, angulo_muneca)
-        if envio["exito"]:
-            registro_latencias.append({
-                "t_unix": time.time(),
-                "latencia_electronica_ms": envio["latencia_electronica_ms"],
-                "latencia_e2e_ms": envio["latencia_e2e_ms"],
-                "angulo_codo_pred": angulo_codo,
-                "angulo_muneca_pred": angulo_muneca,
-                "objetivo_codo": estado.get("objetivo_codo"),
-                "objetivo_muneca": estado.get("objetivo_muneca"),
-            })
+        # enviar_angulos_con_medicion() mantiene bridge.lock tomado durante
+        # toda la espera del ACK y llama reset_input_buffer(), que compite
+        # por el puerto con t_serial y descarta tramas "S,..." pendientes.
+        # Se llama solo muestreado (INTERVALO_MEDICION_LATENCIA_S) en vez de
+        # en cada ciclo: 1 medición/s alcanza para el promedio/desv. est. de
+        # la Tabla 8.2 sin bloquear la lectura de EMG en cada uno de los
+        # ~50 ciclos/s. El resto de los ciclos usa el envío sin espera.
+        if t0 - t_ultima_medicion >= INTERVALO_MEDICION_LATENCIA_S:
+            envio = bridge.enviar_angulos_con_medicion(angulo_codo, angulo_muneca)
+            if envio["exito"]:
+                registro_latencias.append({
+                    "t_unix": time.time(),
+                    "latencia_electronica_ms": envio["latencia_electronica_ms"],
+                    "latencia_e2e_ms": envio["latencia_e2e_ms"],
+                    "angulo_codo_pred": angulo_codo,
+                    "angulo_muneca_pred": angulo_muneca,
+                    "objetivo_codo": estado.get("objetivo_codo"),
+                    "objetivo_muneca": estado.get("objetivo_muneca"),
+                })
+            t_ultima_medicion = t0
+        else:
+            bridge.enviar_angulos(angulo_codo, angulo_muneca)
 
         # Estado compartido con el hilo principal para el panel en vivo
         estado["bic"]    = features[_IDX_RMS_BICEPS]

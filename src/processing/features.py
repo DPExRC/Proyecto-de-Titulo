@@ -35,10 +35,13 @@ def ZCR(ventana: np.ndarray, umbral: float = 0.0) -> int:
     para descartar cruces producidos por ruido de baja amplitud."""
     signos = np.sign(ventana)
     # Reemplaza ceros exactos por el signo de la muestra previa para no
-    # contar falsos cruces en tramos planos.
-    for i in range(1, len(signos)):
-        if signos[i] == 0:
-            signos[i] = signos[i - 1]
+    # contar falsos cruces en tramos planos (equivalente vectorizado del
+    # bucle: propaga hacia adelante el último índice no-cero).
+    ceros = signos == 0
+    if ceros.any():
+        idx_no_cero = np.where(~ceros, np.arange(len(signos)), 0)
+        np.maximum.accumulate(idx_no_cero, out=idx_no_cero)
+        signos = signos[idx_no_cero]
 
     cambios = np.diff(signos) != 0
     if umbral > 0.0:

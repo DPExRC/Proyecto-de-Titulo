@@ -61,7 +61,13 @@ class EMGPredictor:
             return
         try:
             self.regresor = joblib.load(p)
-            self.regresor.n_jobs = 1 
+            # self.regresor es un Pipeline (ver training/train_model.py); el
+            # estimador real vive en el paso "reg" (RandomForestRegressor o
+            # MultiOutputRegressor). Asignar n_jobs directamente sobre el
+            # Pipeline no llega al estimador interno: Pipeline no tiene un
+            # n_jobs propio que controle la predicción del paso "reg".
+            if hasattr(self.regresor, "named_steps") and "reg" in self.regresor.named_steps:
+                self.regresor.named_steps["reg"].n_jobs = 1
             self.regresor_ok = True
             print(f"[Predictor] Regresor cargado: {p}")
         except Exception as e:

@@ -64,6 +64,14 @@ float angulo_muneca_meta    = 0.0f;
 volatile bool comando_procesado = false;
 
 // ---------------------------------------------------------------------------
+// DIAGNÓSTICO — duración real de la ISR (reemplaza el análisis estático de
+// ciclos de instrucción: se mide con micros(), no se estima de forma
+// teórica sobre el ensamblador compilado).
+// ---------------------------------------------------------------------------
+volatile uint16_t isr_duracion_ultima_us = 0;
+volatile uint16_t isr_duracion_max_us    = 0;
+
+// ---------------------------------------------------------------------------
 // TIMER1 — Dispara a 1000 Hz total
 // ---------------------------------------------------------------------------
 void configurarTimer1() {
@@ -77,6 +85,8 @@ void configurarTimer1() {
 }
 
 ISR(TIMER1_COMPA_vect) {
+  uint16_t t_inicio_us = micros();
+
   switch (canal_actual) {
     case 0:
       muestra_biceps = analogRead(PIN_BICEPS);
@@ -91,6 +101,11 @@ ISR(TIMER1_COMPA_vect) {
       canal_actual = 0;
       trama_lista = true; // Fin de ciclo de escaneo de los 3 canales
       break;
+  }
+
+  isr_duracion_ultima_us = (uint16_t)(micros() - t_inicio_us);
+  if (isr_duracion_ultima_us > isr_duracion_max_us) {
+    isr_duracion_max_us = isr_duracion_ultima_us;
   }
 }
 
@@ -188,6 +203,15 @@ void setup() {
   pca.setPWMFreq(FRECUENCIA_PWM);
   delay(10);
 
+  // Diagnóstico I2C real: Wire.endTransmission() devuelve 0 si el PCA9685
+  // respondió en el bus. Se imprime como línea '#...' — esperar_ready() en
+  // capture.py ya tolera y muestra líneas con ese prefijo antes de READY,
+  // así que no cambia el protocolo de arranque existente.
+  Wire.beginTransmission(0x40);
+  uint8_t error_i2c = Wire.endTransmission();
+  Serial.print(F("#I2C_PCA9685:"));
+  Serial.println(error_i2c == 0 ? F("OK") : String(error_i2c));
+
   moverServo(CANAL_SERVO_CODO, 0.0f);
   moverServo(CANAL_SERVO_MUNECA, 0.0f);
 
@@ -228,5 +252,19 @@ void loop() {
       transmitirACK();
       comando_procesado = false;
     }
+  }
+
+  // 4. Diagnóstico de duración de la ISR, 1 vez/s — reemplaza el análisis
+  //    estático de ciclos de instrucción por una medición real con
+  //    micros(). Línea '#...', ya ignorada de forma segura por
+  //    esperar_ready()/leer_trama() en el lado Python.
+  static uint32_t ultimo_diag = 0;
+  if (ahora - ultimo_diag >= 1000) {
+    ultimo_diag = ahora;
+    noInterrupts();
+    uint16_t max_us = isr_duracion_max_us;
+    interrupts();
+    Serial.print(F("#ISR_MAX_US:"));
+    Serial.println(max_us);
   }
 }

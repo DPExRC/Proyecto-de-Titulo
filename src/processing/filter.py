@@ -44,7 +44,7 @@ class FiltroEMG:
     1. Filtro Notch (50 Hz) para eliminar la interferencia de la red eléctrica.
     2. Filtro Pasabanda Butterworth (20-150 Hz) para aislar la señal muscular útil.
     """
-    def __init__(self, fs=1000.0, lowcut=FILTRO_BANDPASS_LOW_HZ, highcut=FILTRO_BANDPASS_HIGH_HZ,
+    def __init__(self, fs=FS, lowcut=FILTRO_BANDPASS_LOW_HZ, highcut=FILTRO_BANDPASS_HIGH_HZ,
                  notch_freq=FILTRO_NOTCH_FREQ_HZ, notch_q=FILTRO_NOTCH_Q, order=FILTRO_BUTTERWORTH_ORDER):
         self.fs = fs
 
@@ -107,16 +107,13 @@ def crear_filtros_por_canal(fs: float = FS, lowcut: float = FILTRO_BANDPASS_LOW_
     tiene su propia señal continua y no deben mezclar su historial de
     filtrado entre sí.
 
-    NOTA sobre `fs`: dsp.py y config.py usan FS_TOTAL (1000 Hz, la tasa
-    total del ADC), no FS (≈333 Hz, la tasa efectiva por canal). Esto es
-    correcto aquí: cada canal recibe una muestra nueva cada vez que el
-    Timer1 del Arduino le toca su turno en el ciclo de 3 canales, pero
-    la propia señal EMG y el ruido de red (50Hz) existen en tiempo real
-    continuo, así que el filtro debe diseñarse con la frecuencia de
-    muestreo real a la que EFECTIVAMENTE llegan las muestras de ESE
-    canal. Si se observa que el notch o el pasabanda no filtran bien en
-    la práctica, revisar si conviene usar FS (≈333 Hz) en su lugar —
-    ver la nota de Nyquist efectivo en config.py (NYQUIST_EFECTIVO_HZ).
+    El default de `fs` es FS (~333.33 Hz), la tasa efectiva por canal, no
+    FS_TOTAL (1000 Hz, tasa total del ADC sumando los 3 canales). dsp.py
+    llama esta función sin argumentos, por lo que usa este default. Cada
+    canal recibe una muestra nueva solo una vez cada 3 interrupciones del
+    Timer1 (ver NYQUIST_EFECTIVO_HZ en config.py), así que el filtro debe
+    diseñarse con la frecuencia real de arribo de muestras de ESE canal,
+    no con la del ADC combinado.
     """
     return {
         nombre: FiltroEMG(fs=fs, lowcut=lowcut, highcut=highcut,

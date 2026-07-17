@@ -20,6 +20,7 @@
 import os
 import sys
 import time
+import json
 import numpy as np
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
@@ -27,6 +28,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from src.config import FS, N_VENTANA, N_FEATURES_POR_CANAL, NOMBRES_FEATURES
 from src.processing.features import extraer_vector_features
 from src.processing.filter import FiltroEMG
+from src.processing.calibration import RUTA_CALIBRACION_DEFAULT
 from src.core.serial_bridge import parsear_trama_emg
 from src.models.predictor import EMGPredictor
 
@@ -182,6 +184,44 @@ def medir_latencia_pipeline(n_repeticiones: int = 50) -> dict:
 
 
 # =============================================================================
+# 6. SNR — relación señal/ruido por canal, desde la calibración ya capturada
+# =============================================================================
+def calcular_snr(ruta_calibracion: str = RUTA_CALIBRACION_DEFAULT) -> dict:
+    """Calcula SNR_dB = 20*log10(RMS_MVC / RMS_baseline) por canal, usando
+    los valores de RMS ya capturados en el protocolo de calibración
+    (reposo + MVC) — no requiere instrumentación ni captura adicional.
+
+    Es una aproximación: usa el RMS de reposo como proxy del piso de
+    ruido, no una medición de ruido aislada con electrodos en corto. Si
+    se necesita el SNR "de manual" (ruido puro, sin señal fisiológica de
+    fondo), esta función no lo reemplaza — solo aprovecha datos que ya
+    existen para dar un número trazable en vez de la afirmación sin
+    respaldo que hay hoy en el Cap. 7."""
+    with open(ruta_calibracion, "r", encoding="utf-8") as f:
+        datos = json.load(f)
+
+    features = datos["features"]
+    baseline = datos["baseline"]
+    mvc = datos["mvc"]
+
+    snr_por_canal = {}
+    for canal in ("biceps", "triceps", "antebrazo"):
+        idx_rms = features.index(f"rms_{canal}")
+        rms_base = baseline[idx_rms]
+        rms_mvc = mvc[idx_rms]
+        snr_por_canal[canal] = (
+            float(20.0 * np.log10(rms_mvc / rms_base)) if rms_base > 0 else None
+        )
+
+    validos = [v for v in snr_por_canal.values() if v is not None]
+    return {
+        "snr_db_por_canal": snr_por_canal,
+        "snr_db_promedio": float(np.mean(validos)) if validos else None,
+        "fuente": os.path.abspath(ruta_calibracion),
+    }
+
+
+# =============================================================================
 # Reporte combinado — para el informe técnico, no para basar tests en él
 # =============================================================================
 def generar_reporte_completo() -> dict:
@@ -195,6 +235,7 @@ def generar_reporte_completo() -> dict:
         "features": verificar_features_validas(),
         "predictor": verificar_predictor_responde_a_activacion(),
         "latencia": medir_latencia_pipeline(),
+        "snr": calcular_snr(),
     }
 
 

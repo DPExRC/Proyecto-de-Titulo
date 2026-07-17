@@ -60,7 +60,9 @@ import joblib
 
 from sklearn.model_selection import train_test_split, KFold, cross_validate
 from sklearn.ensemble import RandomForestRegressor
+from sklearn.multioutput import MultiOutputRegressor
 from sklearn.pipeline import Pipeline
+from sklearn.base import clone
 from sklearn.metrics import mean_squared_error
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
@@ -191,14 +193,22 @@ def entrenar_pipeline(csv_path: str, test_size: float = 0.2, seed: int = 42):
     )
 
     # Definición del modelo base de regresión paralela
-    regresor = RandomForestRegressor(
+    regresor_base = RandomForestRegressor(
         n_estimators=200,
         max_depth=12,
         min_samples_split=5,
         min_samples_leaf=2,
         random_state=seed,
-        n_jobs= 1
+        n_jobs=1
     )
+
+    # Un RF independiente por DOF: codo (features de bíceps/tríceps) y
+    # muñeca (features de antebrazo) son casi disjuntas por diseño, así que
+    # un único árbol optimizando el MSE combinado de ambas salidas diluye
+    # la calidad de las particiones para las dos. n_jobs aquí paraleliza
+    # entre los dos DOF; el n_jobs=1 del RF base evita el problema de
+    # sobrecarga de joblib ya identificado en inferencia de una fila a 50 Hz.
+    regresor = MultiOutputRegressor(regresor_base, n_jobs=1)
 
     # Encapsulamos el pipeline listo para producción
     pipeline = Pipeline([
@@ -214,7 +224,13 @@ def entrenar_pipeline(csv_path: str, test_size: float = 0.2, seed: int = 42):
     fold_resultados = []   # lista de dicts, uno por fold
     mae_cv_por_col = {col: [] for col in COLS_TARGET}
     for i_fold, (train_idx, val_idx) in enumerate(cv.split(X_train), start=1):
-        p_temporal = Pipeline([("reg", RandomForestRegressor(n_estimators=30, max_depth=12, random_state=seed, n_jobs=-1))])
+        # clone() reproduce exactamente la arquitectura y los hiperparámetros
+        # de 'regresor' (el mismo MultiOutputRegressor de 200 árboles/DOF que
+        # se despliega más abajo). Antes se usaba aquí un RF de 30 árboles
+        # con n_jobs=-1, distinto del modelo final — la Tabla 6.7 estaba
+        # validando una configuración que no era la que terminaba en
+        # producción.
+        p_temporal = Pipeline([("reg", clone(regresor))])
         p_temporal.fit(X_train[train_idx], y_train[train_idx])
         preds_val = p_temporal.predict(X_train[val_idx])
 
@@ -381,22 +397,26 @@ def entrenar_pipeline(csv_path: str, test_size: float = 0.2, seed: int = 42):
         console.print(f"  • [bold]{COL_ANGULO_MUNECA}:[/]\n{reporte_muneca}")
 
     # --- TABLA DE RELEVANCIA DE CARACTERÍSTICAS (IMPORTANCIAS DE BOSQUE) ---
+    # rf_interno es un MultiOutputRegressor: un RF independiente por DOF en
+    # rf_interno.estimators_ (mismo orden que COLS_TARGET), sin
+    # feature_importances_ propio a nivel del wrapper.
     rf_interno = pipeline.named_steps["reg"]
-    importancias = rf_interno.feature_importances_
-    
-    tabla_imp = Table(title="\nImportancia Absoluta de Características en el Bosque", box=None)
-    tabla_imp.add_column("Feature Normalizada (%MVC)", style="dim")
-    tabla_imp.add_column("Peso", justify="right", style="bold green")
-    tabla_imp.add_column("Distribución de Relevancia Visual")
+    for nombre_dof, estimador_dof in zip(COLS_TARGET, rf_interno.estimators_):
+        importancias = estimador_dof.feature_importances_
 
-    indices_ordenados = np.argsort(importancias)[::-1]
-    for idx in indices_ordenados:
-        peso = importancias[idx]
-        # Generar barra gráfica con caracteres de bloques proporcionales
-        barra = "█" * int(peso * 50)
-        tabla_imp.add_row(cols_X[idx], f"{peso:.4f}", f"[magenta]{barra}[/]")
-    
-    console.print(tabla_imp)
+        tabla_imp = Table(title=f"\nImportancia de Características — {nombre_dof}", box=None)
+        tabla_imp.add_column("Feature Normalizada (%MVC)", style="dim")
+        tabla_imp.add_column("Peso", justify="right", style="bold green")
+        tabla_imp.add_column("Distribución de Relevancia Visual")
+
+        indices_ordenados = np.argsort(importancias)[::-1]
+        for idx in indices_ordenados:
+            peso = importancias[idx]
+            # Generar barra gráfica con caracteres de bloques proporcionales
+            barra = "█" * int(peso * 50)
+            tabla_imp.add_row(cols_X[idx], f"{peso:.4f}", f"[magenta]{barra}[/]")
+
+        console.print(tabla_imp)
 
     # Guardar artefactos binarios en disco
     os.makedirs(os.path.dirname(os.path.abspath(PATH_MODELO)), exist_ok=True)
@@ -409,9 +429,9 @@ def entrenar_pipeline(csv_path: str, test_size: float = 0.2, seed: int = 42):
         "tiempo_ajuste_segundos": float(t_compilación),
         "dataset_origen": os.path.abspath(csv_path),
         "hiperparametros": {
-            "n_estimadores": rf_interno.n_estimators,
-            "max_depth": rf_interno.max_depth,
-            "min_samples_leaf": rf_interno.min_samples_leaf
+            "n_estimadores": regresor_base.n_estimators,
+            "max_depth": regresor_base.max_depth,
+            "min_samples_leaf": regresor_base.min_samples_leaf
         },
         "features_entrada": cols_X,
         "targets_salida": COLS_TARGET,

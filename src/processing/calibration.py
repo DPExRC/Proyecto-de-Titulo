@@ -151,7 +151,7 @@ class CalibradorEMG:
         capturador.reset()
         console.print("\n[bold cyan][calibración] FASE 1 — REPOSO GENERAL[/]")
         console.print("  [dim]Relaja completamente todo el brazo. Respira hondo y suelta la tensión.[/]")
-        self._contar_regresivo(self, segundos=3, mensaje_final="[bold blue]¡MANTÉN EL REPOSO Y QUÉDATE QUIETO![/]")
+        self._contar_regresivo(segundos=3, mensaje_final="[bold blue]¡MANTÉN EL REPOSO Y QUÉDATE QUIETO![/]")
         vectores = _leer_vectores(ser, capturador, duracion_reposo_s, etiqueta="Capturando Reposo")
         if vectores:
             baseline = np.mean(np.array(vectores), axis=0)
@@ -246,7 +246,7 @@ class CalibradorEMG:
         console.print("[bold green]✓[/] Proceso de calibración anti-fatiga completado con éxito.\n")
 
     @staticmethod
-    def _contar_regresivo(self, segundos: int = 3, mensaje_final: str = ""):
+    def _contar_regresivo(segundos: int = 3, mensaje_final: str = ""):
             """Cuenta regresiva polimórfica que adapta su salida visual según la fase."""
             for s in range(segundos, 0, -1):
                 console.print(f"  [bold yellow]{s}...[/]", end="\r")
