@@ -32,11 +32,11 @@ import uuid
 from datetime import datetime, timezone
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-from src.config import (BAUDRATE, DATA_PATH, DURACION_CAPTURA_S,
+from emg_arm.config import (BAUDRATE, DATA_PATH, DURACION_CAPTURA_S,
                          NOMBRES_FEATURES, NOMBRES_CANALES,
                          COLS_TARGET, COL_ANGULO_CODO, COL_ANGULO_MUNECA,
                          N_VENTANA, N_PASO, ANGULO_MIN, ANGULO_MAX, PORT)
-from src.processing.dsp import CapturadorVentanas
+from emg_arm.processing.dsp import CapturadorVentanas
 
 # Importaciones de la estética unificada Rich
 from rich.console import Console

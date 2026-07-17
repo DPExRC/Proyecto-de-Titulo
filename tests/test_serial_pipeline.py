@@ -3,7 +3,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from src.core.serial_bridge import parsear_trama_emg, procesar_trama_emg
+from emg_arm.communication.serial_bridge import parsear_trama_emg, procesar_trama_emg
 
 
 class DummyCapturador:

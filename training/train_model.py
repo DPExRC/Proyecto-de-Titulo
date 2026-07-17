@@ -66,7 +66,7 @@ from sklearn.base import clone
 from sklearn.metrics import mean_squared_error
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-from src.config import (NOMBRES_FEATURES, COLS_TARGET, COL_ANGULO_CODO,
+from emg_arm.config import (NOMBRES_FEATURES, COLS_TARGET, COL_ANGULO_CODO,
                          COL_ANGULO_MUNECA, DATA_PATH)
 
 # Importaciones de la estética unificada Rich

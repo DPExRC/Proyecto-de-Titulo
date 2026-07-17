@@ -52,8 +52,8 @@ import time
 import numpy as np
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
-from src.config import NOMBRES_FEATURES, NOMBRES_CANALES, N_FEATURES_POR_CANAL
-from src.processing.dsp import CapturadorVentanas
+from emg_arm.config import NOMBRES_FEATURES, NOMBRES_CANALES, N_FEATURES_POR_CANAL
+from emg_arm.processing.dsp import CapturadorVentanas
 
 # Importaciones de la estética unificada Rich
 from rich.console import Console

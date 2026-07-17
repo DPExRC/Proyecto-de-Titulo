@@ -58,7 +58,7 @@ import numpy as np
 import pandas as pd
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
-from src.config import NOMBRES_FEATURES, DATA_PATH
+from emg_arm.config import NOMBRES_FEATURES, DATA_PATH
 
 # Importaciones de la estética unificada Rich
 from rich.console import Console

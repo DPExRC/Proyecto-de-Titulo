@@ -20,9 +20,9 @@ import sys
 from collections import deque
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-from src.config import NOMBRES_CANALES, N_VENTANA, N_PASO
-from src.processing.filter import crear_filtros_por_canal
-from src.processing.features import extraer_vector_features
+from emg_arm.config import NOMBRES_CANALES, N_VENTANA, N_PASO
+from emg_arm.processing.filter import crear_filtros_por_canal
+from emg_arm.processing.features import extraer_vector_features
 
 
 class CapturadorVentanas:

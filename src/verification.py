@@ -25,12 +25,12 @@ import numpy as np
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from src.config import FS, N_VENTANA, N_FEATURES_POR_CANAL, NOMBRES_FEATURES
-from src.processing.features import extraer_vector_features
-from src.processing.filter import FiltroEMG
-from src.processing.calibration import RUTA_CALIBRACION_DEFAULT
-from src.core.serial_bridge import parsear_trama_emg
-from src.models.predictor import EMGPredictor
+from emg_arm.config import FS, N_VENTANA, N_FEATURES_POR_CANAL, NOMBRES_FEATURES
+from emg_arm.processing.features import extraer_vector_features
+from emg_arm.processing.filter import FiltroEMG
+from emg_arm.processing.calibration import RUTA_CALIBRACION_DEFAULT
+from emg_arm.communication.serial_bridge import parsear_trama_emg
+from emg_arm.models.predictor import EMGPredictor
 
 
 # =============================================================================

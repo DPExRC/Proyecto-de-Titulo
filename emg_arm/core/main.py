@@ -24,17 +24,17 @@ import serial
 
 sys.path.insert(0, os.path.dirname(__file__))
 
-from src.config import PORT, BAUDRATE, INTERVALO_CONTROL, NOMBRES_FEATURES, DATA_PATH
-from src.processing.calibration import CalibradorEMG, RUTA_CALIBRACION_DEFAULT
-from src.processing.dsp import CapturadorVentanas
-from src.processing.standardization import (
+from emg_arm.config import PORT, BAUDRATE, INTERVALO_CONTROL, NOMBRES_FEATURES, DATA_PATH
+from emg_arm.processing.calibration import CalibradorEMG, RUTA_CALIBRACION_DEFAULT
+from emg_arm.processing.dsp import CapturadorVentanas
+from emg_arm.processing.standardization import (
     cargar_calibracion, normalizar_dataframe, reportar_saturaciones,
 )
 from training.train_model import entrenar_pipeline, DATA_PATH_NORMALIZADO
 from data.capture import (esperar_ready, ejecutar_captura_interactiva,
                            generar_sesion_id, registrar_sesion, leer_angulos)
-from src.core.serial_bridge import SerialBridge
-from models.predictor import EMGPredictor
+from emg_arm.communication.serial_bridge import SerialBridge
+from emg_arm.models.predictor import EMGPredictor
 
 import numpy as np
 import pandas as pd

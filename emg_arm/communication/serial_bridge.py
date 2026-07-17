@@ -28,9 +28,9 @@ from typing import Optional
 import serial
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
-from src.config import NOMBRES_CANALES
-from src.processing.dsp import CapturadorVentanas
-from src.processing.calibration import CalibradorEMG, RUTA_CALIBRACION_DEFAULT
+from emg_arm.config import NOMBRES_CANALES
+from emg_arm.processing.dsp import CapturadorVentanas
+from emg_arm.processing.calibration import CalibradorEMG, RUTA_CALIBRACION_DEFAULT
 
 PROTOCOLO_PREFIJO_RX = "S,"   # Arduino -> PC (muestras crudas)
 PROTOCOLO_PREFIJO_TX = "A,"   # PC -> Arduino (ángulos objetivo)

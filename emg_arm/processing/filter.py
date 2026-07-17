@@ -26,7 +26,7 @@
 import numpy as np
 from scipy.signal import butter, lfilter, lfilter_zi, iirnotch
 
-from src.config import (
+from emg_arm.config import (
     NOMBRES_CANALES,
     FS,
     FILTRO_NOTCH_FREQ_HZ,
