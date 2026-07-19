@@ -54,8 +54,11 @@ El flujo actual usa estas señales y características:
 
 ```bash
 pip install -r requirements.txt
-pip install rich
+pip install -e .
 ```
+
+La instalación editable registra el paquete `emg_arm` y permite ejecutar
+`training/train_model.py` directamente y correr `pytest` sin flags adicionales.
 
 ---
 

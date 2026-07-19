@@ -31,3 +31,7 @@ include = ["emg_arm*"]
 
 [tool.setuptools.package-data]
 "emg_arm" = ["py.typed"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]

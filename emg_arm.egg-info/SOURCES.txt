@@ -8,6 +8,7 @@ emg_arm.egg-info/dependency_links.txt
 emg_arm.egg-info/requires.txt
 emg_arm.egg-info/top_level.txt
 emg_arm/communication/__init__.py
+emg_arm/communication/protocol.py
 emg_arm/communication/serial_bridge.py
 emg_arm/core/__init__.py
 emg_arm/core/control_loop.py

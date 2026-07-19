@@ -115,7 +115,7 @@ def verificar_features_validas() -> dict:
         "rms_no_negativo": bool(all(features[i] >= 0 for i in idx_rms)),
         "mav_no_negativo": bool(all(features[i] >= 0 for i in idx_mav)),
         "wl_no_negativo": bool(all(features[i] >= 0 for i in idx_wl)),
-        "ZCR_en_rango_fisico": bool(all(0 <= features[i] <= N_VENTANA for i in idx_zcr)),
+        "zcr_en_rango_fisico": bool(all(0 <= features[i] <= N_VENTANA for i in idx_zcr)),
     }
 
 
