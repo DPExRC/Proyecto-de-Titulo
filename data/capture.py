@@ -38,7 +38,7 @@ try:
                              COLS_TARGET, COL_ANGULO_CODO, COL_ANGULO_MUNECA,
                              N_VENTANA, N_PASO, ANGULO_MIN, ANGULO_MAX, PORT)
     from emg_arm.processing.dsp import CapturadorVentanas
-    from emg_arm.communication.serial_bridge import validar_rangos_adc, PROTOCOLO_PREFIJO_RX
+    from emg_arm.communication.protocol import parsear_trama_emg
 except ImportError:
     sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
     from emg_arm.config import (BAUDRATE, DATA_PATH, DURACION_CAPTURA_S,
@@ -46,7 +46,7 @@ except ImportError:
                              COLS_TARGET, COL_ANGULO_CODO, COL_ANGULO_MUNECA,
                              N_VENTANA, N_PASO, ANGULO_MIN, ANGULO_MAX, PORT)
     from emg_arm.processing.dsp import CapturadorVentanas
-    from emg_arm.communication.serial_bridge import validar_rangos_adc, PROTOCOLO_PREFIJO_RX
+    from emg_arm.communication.protocol import parsear_trama_emg
 
 # Importaciones de la estética unificada Rich
 from rich.console import Console
@@ -58,7 +58,6 @@ from rich import box
 
 console = Console()
 
-PROTOCOLO_PREFIJO = PROTOCOLO_PREFIJO_RX
 # NUEVO: cada fila queda etiquetada con la sesión de captura que la generó
 # (sesion_id + timestamp), para poder reconstruir la Tabla 6.6 (número de
 # sesiones, repeticiones, duración total) sin depender de la memoria de
@@ -109,19 +108,6 @@ def esperar_ready(ser: serial.Serial, timeout: float = 30.0) -> bool:
     return False
 
 
-def _parsear_trama(linea: str) -> Optional[list[float]]:
-    if not linea.startswith(PROTOCOLO_PREFIJO):
-        return None
-    partes = linea[len(PROTOCOLO_PREFIJO):].split(",")
-    if len(partes) != len(NOMBRES_CANALES):
-        return None
-    try:
-        valores = [float(p) for p in partes]
-    except ValueError:
-        return None
-    return validar_rangos_adc(valores)
-
-
 def _parsear_numero(texto: str):
     texto = texto.strip()
     if not PATRON_NUMERO.match(texto):
@@ -156,7 +142,7 @@ def capturar_angulos(ser: serial.Serial, angulo_codo: float, angulo_muneca: floa
                 continue
             linea = raw.decode("utf-8", errors="ignore").strip()
 
-            valores = _parsear_trama(linea)
+            valores = parsear_trama_emg(linea)
             if valores is not None:
                 vector_features = capturador.procesar_trama(valores)
                 if vector_features is not None:

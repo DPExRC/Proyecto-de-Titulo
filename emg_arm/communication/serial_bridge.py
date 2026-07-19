@@ -28,13 +28,12 @@ from typing import Optional
 import serial
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
-from emg_arm.config import NOMBRES_CANALES
 from emg_arm.processing.dsp import CapturadorVentanas
 from emg_arm.processing.calibration import CalibradorEMG, RUTA_CALIBRACION_DEFAULT
-
-PROTOCOLO_PREFIJO_RX = "S,"   # Arduino -> PC (muestras crudas)
-PROTOCOLO_PREFIJO_TX = "A,"   # PC -> Arduino (ángulos objetivo)
-PROTOCOLO_ACK = "A"            # Arduino -> PC (echo de comando procesado)
+from emg_arm.communication.protocol import (
+    PROTOCOLO_PREFIJO_RX, PROTOCOLO_PREFIJO_TX, PROTOCOLO_ACK,
+    validar_rangos_adc, parsear_trama_emg,
+)
 
 # Latencia mecánica nominal de los servos KS-3518 (para recorrido típico de 60°)
 LATENCIA_MECANICA_MS = 120.0
@@ -53,41 +52,8 @@ if not logger.handlers:
     logger.propagate = False
 
 
-# Rango válido del ADC del Arduino Uno (10 bits)
-_ADC_MIN = 0
-_ADC_MAX = 1023
-
-
-def validar_rangos_adc(valores: list[float]) -> Optional[list[float]]:
-    """Verifica que todos los valores ADC estén dentro del rango [0, 1023].
-    Pública y reutilizable desde capture.py, calibration.py.
-    Retorna los valores si son válidos, None si alguno está fuera de rango."""
-    for v in valores:
-        if not (_ADC_MIN <= v <= _ADC_MAX):
-            return None
-    return valores
-
-
-# Alias privado para compatibilidad interna
+# Alias privado para compatibilidad interna con el resto de este módulo
 _validar_rangos_adc = validar_rangos_adc
-
-
-def parsear_trama_emg(linea: str) -> Optional[list[float]]:
-    """Parsea una trama EMG cruda sin depender del puerto serie.
-    Rechaza tramas con valores ADC fuera del rango [0, 1023]."""
-    if not linea.startswith(PROTOCOLO_PREFIJO_RX):
-        return None
-
-    partes = linea[len(PROTOCOLO_PREFIJO_RX):].split(",")
-    if len(partes) != len(NOMBRES_CANALES):
-        return None
-
-    try:
-        valores = [float(p) for p in partes]
-    except ValueError:
-        return None
-
-    return _validar_rangos_adc(valores)
 
 
 def procesar_trama_emg(valores_crudos: list[float],

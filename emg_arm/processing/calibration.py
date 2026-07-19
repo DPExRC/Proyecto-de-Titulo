@@ -34,11 +34,10 @@
 #   que ZCR no se comporta así, debe excluirse de esta normalización y
 #   dejarse crudo en el vector final que recibe el regresor.
 #
-# NOTA DE DUPLICACIÓN:
-#   PROTOCOLO_PREFIJO ("S,") y la lógica de parseo de tramas están
-#   duplicadas aquí, en data/captura.py y en src/core/serial_bridge.py.
-#   No se unificó en un único punto de definición. Si se cambia el
-#   protocolo serial, actualizar los 3 archivos.
+# NOTA: el parseo de tramas "S,..." vive en un único punto de definición,
+# emg_arm/communication/protocol.py (parsear_trama_emg), importado también
+# por data/capture.py y emg_arm/communication/serial_bridge.py. No
+# reimplementar el parseo aquí — ver auditoría sobre la triplicación previa.
 # =============================================================================
 
 # =============================================================================
@@ -52,14 +51,16 @@ import time
 import numpy as np
 
 try:
-    from emg_arm.config import NOMBRES_FEATURES, NOMBRES_CANALES, N_FEATURES_POR_CANAL
+    from emg_arm.config import (NOMBRES_FEATURES, NOMBRES_CANALES,
+                             N_FEATURES_POR_CANAL, RUTA_CALIBRACION_DEFAULT)
     from emg_arm.processing.dsp import CapturadorVentanas
-    from emg_arm.communication.serial_bridge import validar_rangos_adc
+    from emg_arm.communication.protocol import parsear_trama_emg
 except ImportError:
     sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
-    from emg_arm.config import NOMBRES_FEATURES, NOMBRES_CANALES, N_FEATURES_POR_CANAL
+    from emg_arm.config import (NOMBRES_FEATURES, NOMBRES_CANALES,
+                             N_FEATURES_POR_CANAL, RUTA_CALIBRACION_DEFAULT)
     from emg_arm.processing.dsp import CapturadorVentanas
-    from emg_arm.communication.serial_bridge import validar_rangos_adc
+    from emg_arm.communication.protocol import parsear_trama_emg
 
 # Importaciones de la estética unificada Rich
 from rich.console import Console
@@ -70,24 +71,6 @@ from rich import box
 
 console = Console()
 
-PROTOCOLO_PREFIJO = "S,"
-
-RUTA_CALIBRACION_DEFAULT = os.path.join(
-    os.path.dirname(__file__), "..", "..", "data", "calibracion.json"
-)
-
-
-def _parsear_trama(linea: str, n_canales: int):
-    if not linea.startswith(PROTOCOLO_PREFIJO):
-        return None
-    partes = linea[len(PROTOCOLO_PREFIJO):].split(",")
-    if len(partes) != n_canales:
-        return None
-    try:
-        return [float(p) for p in partes]
-    except ValueError:
-        return None
-
 
 def _leer_vectores(ser, capturador: CapturadorVentanas, duracion_s: float,
                     etiqueta: str = "") -> list:
@@ -95,7 +78,6 @@ def _leer_vectores(ser, capturador: CapturadorVentanas, duracion_s: float,
     barra de progreso dinámica de Rich."""
     registros = []
     t0 = time.time()
-    n_canales = len(NOMBRES_CANALES)
 
     with Progress(
         TextColumn("[bold yellow]└─►[/] [cyan]{task.description:<25}[/]"),
@@ -115,7 +97,7 @@ def _leer_vectores(ser, capturador: CapturadorVentanas, duracion_s: float,
             if linea.startswith("#"):
                 continue
 
-            valores = _parsear_trama(linea, n_canales)
+            valores = parsear_trama_emg(linea)
             if valores is None:
                 continue
 

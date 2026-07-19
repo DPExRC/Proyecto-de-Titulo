@@ -23,8 +23,6 @@ import time
 import json
 import numpy as np
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-
 from emg_arm.config import FS, N_VENTANA, N_FEATURES_POR_CANAL, NOMBRES_FEATURES
 from emg_arm.processing.features import extraer_vector_features
 from emg_arm.processing.filter import FiltroEMG
@@ -101,7 +99,7 @@ def verificar_filtro_discrimina_bandas(fs: float = FS) -> dict:
 # =============================================================================
 def verificar_features_validas() -> dict:
     """Verifica límites físicos reales de cada tipo de feature, no solo
-    'son números finitos'. RMS/MAV/WL no pueden ser negativos; ZC no
+    'son números finitos'. RMS/MAV/WL no pueden ser negativos; ZCR no
     puede exceder el número de muestras de la ventana."""
     señal = np.sin(np.linspace(0, 4 * np.pi, N_VENTANA))
     features = extraer_vector_features([señal, señal, señal])
@@ -109,7 +107,7 @@ def verificar_features_validas() -> dict:
     idx_rms = [i for i, n in enumerate(NOMBRES_FEATURES) if n.startswith("rms_")]
     idx_mav = [i for i, n in enumerate(NOMBRES_FEATURES) if n.startswith("mav_")]
     idx_wl  = [i for i, n in enumerate(NOMBRES_FEATURES) if n.startswith("wl_")]
-    idx_zc  = [i for i, n in enumerate(NOMBRES_FEATURES) if n.startswith("zc_")]
+    idx_zcr  = [i for i, n in enumerate(NOMBRES_FEATURES) if n.startswith("ZCR_")]
 
     return {
         "longitud": len(features),
@@ -117,7 +115,7 @@ def verificar_features_validas() -> dict:
         "rms_no_negativo": bool(all(features[i] >= 0 for i in idx_rms)),
         "mav_no_negativo": bool(all(features[i] >= 0 for i in idx_mav)),
         "wl_no_negativo": bool(all(features[i] >= 0 for i in idx_wl)),
-        "zc_en_rango_fisico": bool(all(0 <= features[i] <= N_VENTANA for i in idx_zc)),
+        "ZCR_en_rango_fisico": bool(all(0 <= features[i] <= N_VENTANA for i in idx_zcr)),
     }
 
 

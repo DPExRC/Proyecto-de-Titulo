@@ -165,7 +165,7 @@ def _mostrar_tabla_metricas(test_metricas: dict):
 # =============================================================================
 # MENÚ PRINCIPAL
 # =============================================================================
-def main():
+def run():
     console.print(Panel.fit(
         "[bold]Prótesis de brazo — 3 canales sEMG, 2 servos[/]\n"
         "bíceps · tríceps · antebrazo  →  codo · muñeca",
@@ -194,4 +194,4 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    run()

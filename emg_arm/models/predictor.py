@@ -15,7 +15,6 @@ import os
 import sys
 import logging
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
 from emg_arm.config import (NOMBRES_FEATURES, COLS_TARGET,
                          ANGULO_MIN, ANGULO_MAX,
                          UMBRAL_BAJO, UMBRAL_ALTO)

@@ -34,7 +34,7 @@ import os
 # ---------------------------------------------------------------------------
 PORT     = "COM5"       # Cambiar según sistema operativo (Linux: /dev/ttyUSB0)
 BAUDRATE = 115200
-
+RUTA_CALIBRACION_DEFAULT = None
 
 # ---------------------------------------------------------------------------
 # Canales — nombres explícitos por índice, evita errores de orden

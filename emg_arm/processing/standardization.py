@@ -58,7 +58,7 @@ import numpy as np
 import pandas as pd
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
-from emg_arm.config import NOMBRES_FEATURES, DATA_PATH
+from emg_arm.config import NOMBRES_FEATURES, DATA_PATH, RUTA_CALIBRACION_DEFAULT
 
 # Importaciones de la estética unificada Rich
 from rich.console import Console
@@ -68,9 +68,6 @@ from rich import box
 
 console = Console()
 
-RUTA_CALIBRACION_DEFAULT = os.path.join(
-    os.path.dirname(__file__), "..", "..", "data", "calibracion.json"
-)
 RUTA_SALIDA_DEFAULT = os.path.join(
     os.path.dirname(__file__), "..", "..", "data", "datos_emg_normalizado.csv"
 )
