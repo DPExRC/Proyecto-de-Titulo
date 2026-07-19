@@ -126,28 +126,38 @@ El modelo entrenado se guarda en:
 Servos/
 ├── data/
 │   ├── capture.py
+│   ├── migrate.py
 │   ├── calibracion.json
 │   ├── datos_emg.csv
 │   └── datos_emg_normalizado.csv
+├── emg_arm/
+│   ├── config.py
+│   ├── communication/
+│   │   ├── protocol.py
+│   │   └── serial_bridge.py
+│   ├── core/
+│   │   ├── control_loop.py
+│   │   └── main.py
+│   ├── models/
+│   │   └── predictor.py
+│   ├── processing/
+│   │   ├── calibration.py
+│   │   ├── dsp.py
+│   │   ├── features.py
+│   │   ├── filter.py
+│   │   └── standardization.py
+│   └── utils/
 ├── firmware/
 │   └── emg_bridge_v4.ino
 ├── models/
+│   ├── modelo_regresor.pkl
 │   └── meta_entrenamiento.json
-├── src/
-│   ├── config.py
-│   ├── core/
-│   │   └── serial_bridge.py
-│   ├── models/
-│   │   └── predictor.py
-│   └── processing/
-│       ├── calibration.py
-│       ├── dsp.py
-│       ├── features.py
-│       ├── filter.py
-│       └── standardization.py
+├── tests/
 ├── training/
 │   └── train_model.py
 ├── main.py
+├── verification.py
+├── pyproject.toml
 ├── requirements.txt
 └── README.md
 ```
@@ -156,6 +166,6 @@ Servos/
 
 ## 📝 Notas importantes
 
-- El puerto serial por defecto está definido en [src/config.py](src/config.py).
+- El puerto serial por defecto está definido en [emg_arm/config.py](emg_arm/config.py).
 - Si cambias la forma de capturar datos o la calibración, conviene recalcular la normalización antes de entrenar.
 - El sistema está pensado para funcionar en sesiones de calibración y uso consistentes, ya que la normalización depende de la calibración registrada.

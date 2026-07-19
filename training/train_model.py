@@ -32,7 +32,7 @@
 #   - Un único RandomForestRegressor multi-salida predice angulo_codo y
 #     angulo_muneca simultáneamente. Sin etapa de clasificación: el
 #     gating de reposo/ruido se resuelve en el firmware/predictor
-#     mediante UMBRAL_BAJO/UMBRAL_ALTO, el filtro exponencial asimétrico
+#     mediante UMBRAL_BAJO/UMBRAL_ALTO, el filtro EMA simétrico
 #     y el limitador de slew-rate — no es responsabilidad de este script.
 #
 # Genera:
