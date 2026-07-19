@@ -34,8 +34,9 @@ import os
 # ---------------------------------------------------------------------------
 PORT     = "COM5"       # Cambiar según sistema operativo (Linux: /dev/ttyUSB0)
 BAUDRATE = 115200
-RUTA_CALIBRACION_DEFAULT = None
-
+RUTA_CALIBRACION_DEFAULT = os.path.join(
+    os.path.dirname(__file__), "..", "data", "calibracion.json"
+)
 # ---------------------------------------------------------------------------
 # Canales — nombres explícitos por índice, evita errores de orden
 # ---------------------------------------------------------------------------

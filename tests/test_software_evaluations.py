@@ -76,9 +76,9 @@ def test_features_rms_mav_wl_no_negativos():
     assert resultado["wl_no_negativo"] is True
 
 
-def test_features_zc_en_rango_fisico():
+def test_features_zcr_en_rango_fisico():
     resultado = verificar_features_validas()
-    assert resultado["zc_en_rango_fisico"] is True
+    assert resultado["zcr_en_rango_fisico"] is True
 
 
 # =============================================================================
