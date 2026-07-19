@@ -1,7 +1,6 @@
 # =============================================================================
 # filtro.py — Procesamiento Digital de Señales (DSP) en tiempo real
 # =============================================================================
-# Ubicación prevista: src/processing/filtro.py
 #
 # Aplica secuencialmente, por canal:
 #   1. Filtro Notch (50 Hz) — elimina interferencia de la red eléctrica.

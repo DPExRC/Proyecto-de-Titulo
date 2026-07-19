@@ -1,7 +1,6 @@
 # =============================================================================
 # calibracion.py — Calibración baseline/MVC por canal y por feature
 # =============================================================================
-# Ubicación prevista: src/processing/calibracion.py
 #
 # Responsabilidad ÚNICA de este módulo: ejecutar el protocolo de
 # calibración (4 fases) sobre datos en vivo desde el Arduino, y aplicar

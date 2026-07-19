@@ -14,7 +14,7 @@
 #   - Modelo: un único RandomForestRegressor multi-salida
 #     (angulo_codo, angulo_muneca). Sin etapa de clasificación — el
 #     gating de reposo/ruido se resuelve mediante UMBRAL_BAJO/UMBRAL_ALTO
-#     (%MVC), el filtro exponencial asimétrico y el limitador de
+#     (%MVC), el filtro EMA simétrico y el limitador de
 #     slew-rate, igual que en el firmware Arduino.
 #
 # ── PENDIENTE DE CONFIRMACIÓN ────────────────────────────────────────────

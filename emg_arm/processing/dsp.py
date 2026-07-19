@@ -2,7 +2,6 @@
 # dsp.py — Pipeline DSP en Python: filtrado IIR + ventaneo + features
 # =============================================================================
 # Módulo compartido entre data/captura.py (entrenamiento) y
-# src/serial_bridge.py (inferencia en producción).
 #
 # CapturadorVentanas mantiene el estado de filtrado y ventaneo por canal
 # y emite un vector de 12 features (RMS, MAV, WL, ZCR x 3 canales) cada

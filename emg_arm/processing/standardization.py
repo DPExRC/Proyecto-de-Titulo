@@ -1,7 +1,7 @@
 # =============================================================================
 # estandarizacion.py — Normalización %MVC offline de un dataset ya capturado
 # =============================================================================
-# Ubicación prevista: src/processing/estandarizacion.py (o data/estandarizacion.py
+# Ubicación prevista: emg_arm/processing/estandarizacion.py (o data/estandarizacion.py
 # si se prefiere ejecutar como script suelto, junto a captura.py)
 #
 # Responsabilidad ÚNICA de este módulo: tomar un CSV de features CRUDOS
@@ -41,8 +41,8 @@
 #                                          fila superó el 100% del MVC.
 #
 # Uso:
-#   python src/processing/estandarizacion.py
-#   python src/processing/estandarizacion.py --datos data/datos_emg.csv \
+#   python emg_arm/processing/estandarizacion.py
+#   python emg_arm/processing/estandarizacion.py --datos data/datos_emg.csv \
 #       --calibracion data/calibracion.json --salida data/datos_emg_normalizado.csv
 # =============================================================================
 

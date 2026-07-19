@@ -100,7 +100,7 @@ Esto genera un archivo CSV con características crudas en:
 #### Normalización %MVC
 
 ```bash
-python src/processing/standardization.py
+python emg_arm/processing/standardization.py
 ```
 
 Esto produce:
