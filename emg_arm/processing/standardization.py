@@ -16,15 +16,18 @@
 # poder recalcular la normalización sin tener que recapturar datos si se
 # corrige un bug de calibración o se ajusta el criterio de clipping.
 #
-# SUPUESTO DE DISEÑO — una sola calibración por archivo de dataset:
-#   El proyecto asume que cada CSV de datos crudos (datos_emg.csv)
-#   corresponde a UNA sola sesión de calibración (ver nota en
-#   calibracion.py: "el diseño del proyecto asume calibración por
-#   sesión, no reutilización entre sesiones"). Si en el futuro se
-#   capturan datos de múltiples sesiones en un mismo archivo, este
-#   script debe extenderse para leer una columna "sesion_id" por fila
-#   y aplicar la calibración correspondiente a cada una (actualmente
-#   NO implementado — ver TODO al final del archivo).
+# SOPORTE MULTI-SESIÓN:
+#   Cada fila del CSV crudo trae su propio "sesion_id" (escrito por
+#   data/captura.py). La calibración correspondiente a cada sesión se
+#   guarda indexada en el mismo calibracion.json (ver
+#   CalibradorEMG.guardar(ruta, sesion_id=...)). normalizar_dataframe_
+#   multisesion() agrupa el DataFrame por sesion_id y aplica a cada grupo
+#   su propia calibración; si una sesión no tiene calibración indexada
+#   (p. ej. filas "legacy" migradas desde el esquema sin sesion_id por
+#   data/migrate.py), usa la calibración "default" (la más reciente
+#   guardada) como respaldo. normalizar_dataframe() (una sola calibración
+#   para todo el DataFrame) se mantiene para el caso de un dataset de una
+#   única sesión, o para uso directo/pruebas.
 #
 # Normalización aplicada, feature por feature:
 #   %MVC = (valor_crudo - baseline) / (mvc - baseline) * 100
@@ -75,7 +78,16 @@ RUTA_SALIDA_DEFAULT = os.path.join(
 UMBRAL_ALERTA_SATURACION_PCT = 5.0  
 
 
-def cargar_calibracion(ruta: str) -> dict:
+def cargar_calibraciones(ruta: str) -> dict:
+    """Carga el archivo de calibración completo, indexado por sesión.
+
+    Retorna {"default": {"baseline":..., "mvc":...} | None,
+             "sesiones": {"<sesion_id>": {"baseline":..., "mvc":...}, ...}}.
+
+    Reconoce tanto el formato nuevo (multi-sesión, con claves "default" y
+    "sesiones") como el formato plano previo ({"baseline":..., "mvc":...}
+    directamente en la raíz, sin "sesiones") — en ese caso se expone como
+    único "default", sin sesiones indexadas."""
     if not os.path.exists(ruta):
         raise FileNotFoundError(f"No existe archivo de calibración: {ruta}")
 
@@ -89,9 +101,64 @@ def cargar_calibracion(ruta: str) -> dict:
             "de normalizar, o alinear NOMBRES_FEATURES manualmente."
         )
 
-    baseline = np.array(data["baseline"], dtype=np.float64)
-    mvc = np.array(data["mvc"], dtype=np.float64)
-    return {"baseline": baseline, "mvc": mvc}
+    def _a_arrays(entrada):
+        return {
+            "baseline": np.array(entrada["baseline"], dtype=np.float64),
+            "mvc": np.array(entrada["mvc"], dtype=np.float64),
+        }
+
+    if "sesiones" in data or "default" in data:
+        # Formato nuevo (multi-sesión).
+        default = _a_arrays(data["default"]) if data.get("default") else None
+        sesiones = {sid: _a_arrays(entrada) for sid, entrada in data.get("sesiones", {}).items()}
+    else:
+        # Formato plano (pre multi-sesión): única calibración = default.
+        default = _a_arrays(data)
+        sesiones = {}
+
+    return {"default": default, "sesiones": sesiones}
+
+
+def cargar_calibracion(ruta: str) -> dict:
+    """Compatibilidad hacia atrás: retorna solo la calibración "default"
+    (la más reciente guardada), ignorando cualquier indexación por sesión.
+    Usar cargar_calibraciones() + normalizar_dataframe_multisesion() para
+    datasets con más de una sesión de calibración."""
+    calibraciones = cargar_calibraciones(ruta)
+    if calibraciones["default"] is None:
+        raise ValueError(f"El archivo de calibración no tiene una calibración 'default': {ruta}")
+    return calibraciones["default"]
+
+
+def normalizar_dataframe_multisesion(df: pd.DataFrame, calibraciones: dict) -> pd.DataFrame:
+    """Normaliza `df` a %MVC aplicando, a cada fila, la calibración de su
+    propia sesion_id (calibraciones["sesiones"][sesion_id]). Si `df` no
+    tiene columna "sesion_id", o si alguna sesión no tiene calibración
+    indexada, cae de vuelta a calibraciones["default"] para esas filas.
+
+    Levanta ValueError si una sesión no tiene calibración indexada NI hay
+    "default" disponible como respaldo — a diferencia de silenciarlo, para
+    no normalizar datos con una calibración incorrecta sin que se note."""
+    if "sesion_id" not in df.columns:
+        if calibraciones["default"] is None:
+            raise ValueError(
+                "El dataset no tiene columna 'sesion_id' y la calibración "
+                "no tiene 'default'. No hay con qué normalizar."
+            )
+        return normalizar_dataframe(df, calibraciones["default"])
+
+    grupos_normalizados = []
+    for sesion_id, grupo in df.groupby("sesion_id", sort=False, dropna=False):
+        calib = calibraciones["sesiones"].get(sesion_id, calibraciones["default"])
+        if calib is None:
+            raise ValueError(
+                f"La sesión '{sesion_id}' no tiene calibración indexada y "
+                f"tampoco hay 'default' como respaldo. Recalibrar o guardar "
+                f"una calibración 'default' antes de normalizar."
+            )
+        grupos_normalizados.append(normalizar_dataframe(grupo, calib))
+
+    return pd.concat(grupos_normalizados).sort_index()
 
 
 def normalizar_dataframe(df: pd.DataFrame, calibracion: dict) -> pd.DataFrame:
@@ -215,8 +282,8 @@ def main():
     console.print(f"\n[cyan]ℹ[/] Se cargaron [bold green]{len(df)}[/] filas desde el dataset crudo.")
 
     try:
-        calibracion = cargar_calibracion(args.calibracion)
-        df_normalizado = normalizar_dataframe(df, calibracion)
+        calibraciones = cargar_calibraciones(args.calibracion)
+        df_normalizado = normalizar_dataframe_multisesion(df, calibraciones)
     except Exception as e:
         console.print(f"[bold red]✗ Error de normalización:[/] {e}")
         sys.exit(1)
@@ -232,16 +299,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
-# =============================================================================
-# TODO — soporte multi-sesión (no implementado):
-#   Si en algún momento se capturan datos de varias sesiones de calibración
-#   distintas en un mismo datos_emg.csv, agregar:
-#     1. Columna "sesion_id" en cada fila (escrita por captura.py).
-#     2. Un calibracion.json indexado por sesion_id, en vez de un único
-#        baseline/mvc global (ver ejemplo de estructura discutido en el
-#        diseño: {"<sesion_id>": {"baseline": [...], "mvc": [...]}, ...}).
-#     3. normalizar_dataframe() debería agrupar por sesion_id y aplicar
-#        la calibración correspondiente a cada grupo, en vez de una única
-#        calibración global para todo el DataFrame.
-# =============================================================================

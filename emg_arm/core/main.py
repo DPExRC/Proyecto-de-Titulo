@@ -22,11 +22,11 @@ from emg_arm.config import PORT, BAUDRATE, DATA_PATH, RUTA_CALIBRACION_DEFAULT
 from emg_arm.processing.calibration import CalibradorEMG
 from emg_arm.processing.dsp import CapturadorVentanas
 from emg_arm.processing.standardization import (
-    cargar_calibracion, normalizar_dataframe, reportar_saturaciones,
+    cargar_calibraciones, normalizar_dataframe_multisesion, reportar_saturaciones,
 )
 from training.train_model import entrenar_pipeline, DATA_PATH_NORMALIZADO
 from data.capture import (
-    esperar_ready, ejecutar_captura_interactiva,
+    esperar_ready, ejecutar_captura_interactiva, generar_sesion_id,
 )
 from emg_arm.core.control_loop import flujo_usar
 
@@ -85,12 +85,14 @@ def flujo_entrenar():
 
     # --- 1. Calibración ------------------------------------------------------
     console.rule("[bold yellow]Paso 1/4 — Calibración baseline/MVC")
+    sesion_id = generar_sesion_id()
     calibrador = CalibradorEMG()
     capturador_calib = CapturadorVentanas()
     calibrador.ejecutar(ser, capturador_calib)
-    calibrador.guardar(RUTA_CALIBRACION_DEFAULT)
+    calibrador.guardar(RUTA_CALIBRACION_DEFAULT, sesion_id=sesion_id)
     console.print(f"[bold green]✓[/] Calibración guardada en "
-                  f"[cyan]{RUTA_CALIBRACION_DEFAULT}[/]\n")
+                  f"[cyan]{RUTA_CALIBRACION_DEFAULT}[/] "
+                  f"[dim](sesión {sesion_id})[/]\n")
 
     # --- 2. Captura de dataset ------------------------------------------------
     console.rule("[bold yellow]Paso 2/4 — Captura de dataset")
@@ -99,7 +101,8 @@ def flujo_entrenar():
         console.print("[yellow]Captura cancelada por el usuario.[/]")
         return
 
-    total_capturado = ejecutar_captura_interactiva(ser, ruta_salida=DATA_PATH)
+    total_capturado = ejecutar_captura_interactiva(ser, ruta_salida=DATA_PATH,
+                                                     sesion_id=sesion_id)
     ser.close()
 
     if total_capturado == 0:
@@ -112,8 +115,8 @@ def flujo_entrenar():
     console.rule("[bold yellow]Paso 3/4 — Estandarización %MVC")
     with console.status("[cyan]Normalizando dataset...", spinner="dots"):
         df = pd.read_csv(DATA_PATH)
-        calibracion = cargar_calibracion(RUTA_CALIBRACION_DEFAULT)
-        df_normalizado = normalizar_dataframe(df, calibracion)
+        calibraciones = cargar_calibraciones(RUTA_CALIBRACION_DEFAULT)
+        df_normalizado = normalizar_dataframe_multisesion(df, calibraciones)
 
     reportar_saturaciones(df_normalizado)
 

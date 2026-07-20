@@ -227,14 +227,23 @@ def resumen_csv(path: str):
 # ------------------------------------------------------------------------------
 def ejecutar_captura_interactiva(ser: serial.Serial, duracion_s: int = DURACION_CAPTURA_S,
                                   ruta_salida: str = DATA_PATH,
-                                  ruta_sesiones: str = RUTA_SESIONES) -> int:
+                                  ruta_sesiones: str = RUTA_SESIONES,
+                                  sesion_id: Optional[str] = None) -> int:
+    """Si `sesion_id` no se especifica, se genera uno nuevo (comportamiento
+    previo, sin cambios). Si se especifica (p. ej. reutilizando el mismo
+    sesion_id que ya se usó para guardar la calibración de esta sesión en
+    CalibradorEMG.guardar()), los datos capturados quedan vinculados a esa
+    misma sesión — necesario para que la normalización %MVC offline pueda
+    aplicar la calibración correcta a cada grupo de filas (ver
+    emg_arm/processing/standardization.py::normalizar_dataframe_multisesion)."""
     os.makedirs(os.path.dirname(os.path.abspath(ruta_salida)), exist_ok=True)
     archivo_nuevo = not os.path.exists(ruta_salida)
 
     capturador = CapturadorVentanas()
     total = 0
 
-    sesion_id = generar_sesion_id()
+    if sesion_id is None:
+        sesion_id = generar_sesion_id()
     t_inicio_sesion = datetime.now(timezone.utc)
     repeticiones_por_posicion = {}   # {"codo,muneca": n_vectores}
 

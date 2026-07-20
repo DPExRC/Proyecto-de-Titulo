@@ -291,20 +291,66 @@ class CalibradorEMG:
             "saturado": saturado.tolist(),
         }
 
-    def guardar(self, ruta: str = RUTA_CALIBRACION_DEFAULT):
+    def guardar(self, ruta: str = RUTA_CALIBRACION_DEFAULT,
+                sesion_id: str = None):
+        """Guarda la calibración activa en `ruta`.
+
+        Si `sesion_id` se especifica, la calibración queda además indexada
+        bajo esa sesión (data["sesiones"][sesion_id]), preservando las
+        calibraciones de otras sesiones ya guardadas en el mismo archivo.
+        En todos los casos se actualiza data["default"] con la calibración
+        recién guardada — mantiene el comportamiento de uso único/en vivo
+        (CalibradorEMG.cargar() sin sesion_id) sin cambios.
+
+        Formato del archivo (nuevo, desde soporte multi-sesión):
+            {"features": [...], "default": {"baseline": [...], "mvc": [...]},
+             "sesiones": {"<sesion_id>": {"baseline": [...], "mvc": [...]}}}
+        """
         if not self.calibrado:
             console.print("[bold red]✗[/] No hay calibración activa para guardar.")
             return
+
         os.makedirs(os.path.dirname(os.path.abspath(ruta)), exist_ok=True)
-        data = {
-            "features": NOMBRES_FEATURES,
-            "baseline": self.baseline.tolist(),
-            "mvc": self.mvc.tolist(),
-        }
+
+        data = {"features": NOMBRES_FEATURES, "default": None, "sesiones": {}}
+        if os.path.exists(ruta):
+            try:
+                with open(ruta, "r") as f:
+                    existente = json.load(f)
+                if existente.get("features") == NOMBRES_FEATURES:
+                    # Preserva calibraciones de otras sesiones ya guardadas.
+                    data["sesiones"] = existente.get("sesiones", {})
+                    data["default"] = existente.get("default")
+                else:
+                    console.print(
+                        "[bold yellow]⚠[/] El archivo de calibración existente usa un "
+                        "orden de features distinto al actual — se sobrescribe desde cero."
+                    )
+            except (json.JSONDecodeError, OSError):
+                console.print(
+                    "[bold yellow]⚠[/] No se pudo leer el archivo de calibración "
+                    "existente (corrupto o ilegible) — se sobrescribe desde cero."
+                )
+
+        entrada = {"baseline": self.baseline.tolist(), "mvc": self.mvc.tolist()}
+        data["default"] = entrada
+        if sesion_id is not None:
+            data["sesiones"][sesion_id] = entrada
+
         with open(ruta, "w") as f:
             json.dump(data, f, indent=2)
 
-    def cargar(self, ruta: str = RUTA_CALIBRACION_DEFAULT) -> bool:
+    def cargar(self, ruta: str = RUTA_CALIBRACION_DEFAULT,
+               sesion_id: str = None) -> bool:
+        """Carga una calibración desde `ruta`.
+
+        Si `sesion_id` se especifica y existe en data["sesiones"], se usa
+        esa calibración específica. Si no se especifica, o la sesión no
+        está indexada (p. ej. filas "legacy" migradas sin sesión propia),
+        se usa data["default"] como fallback. También reconoce el formato
+        plano previo a soporte multi-sesión ({"baseline": [...], "mvc":
+        [...]} directamente en la raíz), para no invalidar archivos ya
+        generados por versiones anteriores de este módulo."""
         if not os.path.exists(ruta):
             console.print(f"[bold red]✗[/] No existe archivo de calibración en: [dim]{ruta}[/]")
             return False
@@ -313,7 +359,23 @@ class CalibradorEMG:
         if data.get("features") != NOMBRES_FEATURES:
             console.print("[bold red]⚠ [calibración] ERROR:[/] Desajuste en el orden o cantidad de features del archivo. No se cargará.")
             return False
-        self.baseline = np.array(data["baseline"])
-        self.mvc = np.array(data["mvc"])
+
+        entrada = None
+        if sesion_id is not None:
+            entrada = data.get("sesiones", {}).get(sesion_id)
+        if entrada is None:
+            entrada = data.get("default")
+        if entrada is None and "baseline" in data and "mvc" in data:
+            # Formato plano (pre multi-sesión).
+            entrada = {"baseline": data["baseline"], "mvc": data["mvc"]}
+        if entrada is None:
+            console.print(
+                f"[bold red]✗[/] No hay calibración disponible en [dim]{ruta}[/] "
+                f"(sesion_id={sesion_id!r} no indexada y sin default)."
+            )
+            return False
+
+        self.baseline = np.array(entrada["baseline"])
+        self.mvc = np.array(entrada["mvc"])
         self.calibrado = True
         return True
