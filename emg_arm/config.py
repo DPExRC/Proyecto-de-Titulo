@@ -37,6 +37,9 @@ BAUDRATE = 115200
 RUTA_CALIBRACION_DEFAULT = os.path.join(
     os.path.dirname(__file__), "..", "data", "calibracion.json"
 )
+RUTA_SESIONES_CONTROL = os.path.join(
+    os.path.dirname(__file__), "..", "data", "sesiones_control.json"
+)
 # ---------------------------------------------------------------------------
 # Canales — nombres explícitos por índice, evita errores de orden
 # ---------------------------------------------------------------------------

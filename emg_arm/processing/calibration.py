@@ -125,7 +125,7 @@ class CalibradorEMG:
                  duracion_reposo_s: float = 3.0,
                  duracion_mvc_s: float = 4.0):  # Ajustado por defecto a 4s (rango 3-5s)
         """Ejecuta el protocolo avanzado anti-fatiga con 3 intentos de MVC por músculo,
-        descansos de 45s entre intentos y descansos largos de 2.5 min entre músculos."""
+        descansos de 45s entre intentos y descansos largos de 2 min entre músculos."""
         n_feat = len(NOMBRES_FEATURES)
         baseline = np.zeros(n_feat)
         mvc = np.full(n_feat, 1.0) 

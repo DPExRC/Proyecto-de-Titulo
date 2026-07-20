@@ -28,7 +28,8 @@ from rich.live import Live
 from rich import box
 
 from emg_arm.config import (PORT, BAUDRATE, INTERVALO_CONTROL,
-                         NOMBRES_FEATURES, RUTA_CALIBRACION_DEFAULT)
+                         NOMBRES_FEATURES, RUTA_CALIBRACION_DEFAULT,
+                         RUTA_SESIONES_CONTROL)
 from emg_arm.communication.serial_bridge import SerialBridge
 from emg_arm.models.predictor import EMGPredictor
 from data.capture import (generar_sesion_id, registrar_sesion, leer_angulos)
@@ -38,9 +39,6 @@ console = Console()
 # ---------------------------------------------------------------------------
 # Constantes de control
 # ---------------------------------------------------------------------------
-RUTA_SESIONES_CONTROL = os.path.join(
-    os.path.dirname(__file__), "data", "sesiones_control.json"
-)
 LOG_UMBRAL_CAMBIO = 2.0
 INTERVALO_MEDICION_LATENCIA_S = 1.0
 
